@@ -665,6 +665,9 @@ function makePageElement(id) {
     },
     addEventListener() {},
     removeEventListener() {},
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    getAttribute(name) { return this.attributes[name] ?? null; },
     appendChild(child) { this.children.push(child); return child; },
     remove() {},
     before() {},
@@ -684,11 +687,14 @@ function makePageElement(id) {
  * The page is inline script, so it runs through `new Function` with just the
  * globals it touches. The engine in `window.parent` reports `playback: true` —
  * the shell document owns the audio element, which is the normal case and the
- * one where the page must still fetch everything it renders by itself.
+ * one where the page must still fetch everything it renders by itself. The fake
+ * shell document declares `lang="en"` unless `options.lang` says otherwise, and
+ * `options.storage` seeds the page's local storage.
  */
 async function bootPanel(options = {}) {
   const state = options.state ?? stateDocument();
   const lyricsById = options.lyricsById ?? {};
+  const stored = new Map(Object.entries(options.storage ?? {}));
   const requests = [];
   const elements = new Map();
   const intervals = [];
@@ -705,8 +711,19 @@ async function bootPanel(options = {}) {
     querySelectorAll: () => [],
   };
   const window = {
-    parent: { __dshMusicEngine: { playback: true, apply() {}, sync() {}, position: () => 0 } },
+    parent: {
+      __dshMusicEngine: { playback: true, apply() {}, sync() {}, position: () => 0 },
+      // The page follows the shell's `<html lang>`; pin it so assertions on
+      // labels do not depend on the machine's own locale.
+      document: { documentElement: { lang: options.lang ?? 'en' } },
+    },
     addEventListener() {},
+  };
+  // The page remembers the lyrics pane's collapse state here.
+  const localStorage = {
+    getItem: (key) => (stored.has(key) ? stored.get(key) : null),
+    setItem: (key, value) => { stored.set(key, String(value)); },
+    removeItem: (key) => { stored.delete(key); },
   };
   const fetch = async (url) => {
     const path = String(url).replace(/^.*\/api/, '');
@@ -730,6 +747,7 @@ async function bootPanel(options = {}) {
   // A no-op `setTimeout` keeps a stray toast timer from outliving the test.
   new Function(
     'document', 'window', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'console',
+    'localStorage',
     inline.at(-1)[1],
   )(
     document, window, fetch,
@@ -738,6 +756,7 @@ async function bootPanel(options = {}) {
     () => 0,
     () => {},
     console,
+    localStorage,
   );
   await settle();
 
@@ -746,6 +765,7 @@ async function bootPanel(options = {}) {
     state,
     requests,
     lyricRequests,
+    storage: stored,
     element: (id) => document.getElementById(id),
     /** Run the page's 1.5 s poll once, the way the browser would. */
     async poll() {
@@ -781,4 +801,33 @@ test('a track change refetches and replaces the pane', async () => {
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456']);
   assert.match(panel.element('lyrics').innerHTML, /the next track/);
   assert.doesNotMatch(panel.element('lyrics').innerHTML, /first line/);
+});
+
+test('the lyrics pane collapses to its header on demand, and the choice sticks', async () => {
+  const panel = await bootPanel();
+  const pane = panel.element('lyrics');
+  const toggle = panel.element('lyrics-toggle');
+  assert.equal(pane.classList.contains('collapsed'), false, 'open by default');
+  assert.equal(toggle.textContent, 'Hide');
+
+  toggle.onclick();
+  assert.equal(pane.classList.contains('collapsed'), true, 'the click collapses the pane');
+  assert.equal(toggle.textContent, 'Show', 'and the button offers the way back');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(panel.storage.get('dsh-music.lyrics.collapsed'), '1', 'the choice is remembered');
+
+  toggle.onclick();
+  assert.equal(pane.classList.contains('collapsed'), false);
+  assert.equal(toggle.textContent, 'Hide');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(panel.storage.get('dsh-music.lyrics.collapsed'), '0');
+});
+
+test('a remembered collapse is applied when the page loads', async () => {
+  const panel = await bootPanel({ storage: { 'dsh-music.lyrics.collapsed': '1' } });
+  assert.equal(panel.element('lyrics').classList.contains('collapsed'), true);
+  assert.equal(panel.element('lyrics-toggle').textContent, 'Show');
+  // The lines are still fetched while hidden, so expanding is instant.
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/123']);
+  assert.match(panel.element('lyrics').innerHTML, /first line/);
 });

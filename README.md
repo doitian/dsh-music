@@ -518,7 +518,9 @@ where the page must fetch everything it renders on its own: lyrics used to be
 requested only from the local fallback transport's `applySource`, so with the
 engine playing the pane stayed empty for every track. Three tests hold the
 line: the rendered track is asked for, one fetch per track rather than one per
-poll, and a track change replaces the pane.
+poll, and a track change replaces the pane. Two more cover the pane's shape: it
+is capped to a few lines, collapses to its header on demand, and remembers that
+choice across loads — while still fetching the lines, so expanding is instant.
 
 `npm test` runs the three deterministic files in sequence (`npm run test:all`
 adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which

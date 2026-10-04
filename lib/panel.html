@@ -96,7 +96,21 @@
       .mode { font-size: 12px; }
 
       .section-title { padding: 12px 14px 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
-      .lyrics { max-height: 34%; overflow: auto; padding: 0 14px 12px; }
+      .section-title.head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .section-title.head button {
+        background: none; border: 0; margin: 0; padding: 0; font: inherit; color: var(--muted);
+        text-transform: inherit; letter-spacing: inherit; cursor: pointer;
+      }
+      .section-title.head button:hover { color: var(--fg); }
+      /* The pane is a glance at the current line, not a page: four lines of
+         synced text, scrolled for the rest, so the queue keeps the space.
+         `--lyrics-lines` is the single knob (the padding below is the `+ 12px`). */
+      .lyrics {
+        --lyrics-lines: 4;
+        max-height: calc(var(--lyrics-lines) * 1.5em + var(--lyrics-lines) * 4px + 12px);
+        line-height: 1.5; overflow: auto; padding: 0 14px 12px;
+      }
+      .lyrics.collapsed { display: none; }
       .lyrics p { margin: 0; padding: 2px 0; color: var(--muted); transition: color 0.15s; }
       .lyrics p.on { color: var(--fg); font-weight: 600; }
       .queue { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -166,7 +180,12 @@
             </div>
           </div>
 
-          <div class="section-title" data-i18n="lyrics">Lyrics</div>
+          <div class="section-title head">
+            <span data-i18n="lyrics">Lyrics</span>
+            <!-- Label and title are state-dependent, so the script owns them
+                 (applyStaticStrings cannot know which way the pane is now). -->
+            <button id="lyrics-toggle" type="button" aria-expanded="true">Hide</button>
+          </div>
           <div class="lyrics" id="lyrics"><p class="hint">—</p></div>
 
           <div class="section-title"><span data-i18n="queue">Queue</span> <span id="counts"></span></div>
@@ -245,6 +264,10 @@
           dislike: '不喜欢',
           mute: '静音',
           lyrics: '歌词',
+          lyricsHide: '收起',
+          lyricsShow: '展开',
+          lyricsToggleHide: '收起歌词面板',
+          lyricsToggleShow: '展开歌词面板',
           queue: '播放队列',
           djModel: 'AI DJ 模型',
           customModelPh: '自定义 model id',
@@ -323,6 +346,10 @@
           dislike: 'Dislike',
           mute: 'Mute',
           lyrics: 'Lyrics',
+          lyricsHide: 'Hide',
+          lyricsShow: 'Show',
+          lyricsToggleHide: 'Collapse the lyrics pane',
+          lyricsToggleShow: 'Expand the lyrics pane',
           queue: 'Queue',
           djModel: 'DJ model',
           customModelPh: 'Custom model id',
@@ -422,6 +449,9 @@
           document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
         } catch { /* headless */ }
         applyStaticStrings();
+        // The toggle's label and title depend on the collapse state, not on a
+        // fixed key, so they are painted rather than carried as data-i18n.
+        paintLyricsToggle();
         // The gesture hint carries markup; drop it so render() rebuilds it in
         // the new language.
         $('gesture')?.remove();
@@ -448,6 +478,9 @@
       let lyricTrackId = null;
       /** Bumped per request so a slow reply for a skipped track is discarded. */
       let lyricRequest = 0;
+      /** Local-storage key for whether the lyrics pane is collapsed. */
+      const LYRICS_PREF = 'dsh-music.lyrics.collapsed';
+      let lyricsCollapsed = readLyricsPref();
       let volumePostAt = 0;
 
       const fmt = (ms) => {
@@ -847,6 +880,37 @@
       }
 
       // ---------------------------------------------------------------- lyrics
+      /** Collapsed preference, remembered across reloads when storage is open. */
+      function readLyricsPref() {
+        try { return localStorage.getItem(LYRICS_PREF) === '1'; } catch { return false; }
+      }
+
+      function saveLyricsPref(collapsed) {
+        try { localStorage.setItem(LYRICS_PREF, collapsed ? '1' : '0'); } catch { /* storage denied */ }
+      }
+
+      /** Reflect `lyricsCollapsed` in the pane and in the header button. */
+      function paintLyricsToggle() {
+        $('lyrics').classList.toggle('collapsed', lyricsCollapsed);
+        const button = $('lyrics-toggle');
+        button.textContent = t(lyricsCollapsed ? 'lyricsShow' : 'lyricsHide');
+        button.title = t(lyricsCollapsed ? 'lyricsToggleShow' : 'lyricsToggleHide');
+        button.setAttribute('aria-expanded', lyricsCollapsed ? 'false' : 'true');
+      }
+
+      $('lyrics-toggle').onclick = () => {
+        lyricsCollapsed = !lyricsCollapsed;
+        saveLyricsPref(lyricsCollapsed);
+        paintLyricsToggle();
+        // A hidden pane has no scroll position to keep, so re-expanding puts
+        // the highlighted line back in view instead of waiting for the next
+        // line change to scroll there.
+        if (!lyricsCollapsed) {
+          lyricLine = -1;
+          paintLyrics();
+        }
+      };
+
       async function loadLyrics(id) {
         const request = ++lyricRequest;
         lyric = null;
