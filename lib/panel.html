@@ -896,6 +896,14 @@
         paintProgress();
       }
 
+      /**
+       * Rows the queue list shows at most. The host keeps the full queue (and
+       * the play history backing the stats), but the panel only paints a
+       * sliding window around the cursor so old, already-played tracks drop
+       * out of view instead of piling up.
+       */
+      const MAX_VISIBLE_ROWS = 30;
+
       function renderQueue() {
         if (!state) return;
         const queue = state.queue || [];
@@ -903,8 +911,20 @@
           $('queue').innerHTML = `<div class="empty">${esc(t('queueEmpty'))}</div>`;
           return;
         }
+        // A window of at most MAX_VISIBLE_ROWS rows that always includes the
+        // current track: up to four played rows above it for context, the rest
+        // upcoming. Row numbers stay absolute, so trimmed rows read as a gap
+        // in the numbering, and the counts line names the visible range.
+        const cursor = state.index < 0 ? 0 : state.index;
+        const start = Math.max(0, Math.min(cursor - 4, queue.length - MAX_VISIBLE_ROWS));
+        const end = Math.min(queue.length, start + MAX_VISIBLE_ROWS);
+        if (end - start < queue.length) {
+          $('counts').textContent = `(${start + 1}–${end} / ${queue.length})`;
+        }
         $('queue').innerHTML = queue
-          .map((track, index) => {
+          .slice(start, end)
+          .map((track, offset) => {
+            const index = start + offset;
             const playing = index === state.index;
             return `<div class="row ${playing ? 'playing' : ''}" data-jump="${index}">
               <span class="idx">${playing ? '▶' : index + 1}</span>
