@@ -188,11 +188,14 @@ something:
   are the same three levels rather than two flags: one replaces the other, and
   disliking a liked track removes it on NetEase as well.
 - **Removing a queued track is a dislike, once.** The row's ✕ goes through the
-  same endpoint as the ✕ button, so the removal *is* the judgement — but a track
-  that already carries a level keeps it, because removing is often just queue
-  housekeeping (clearing out what has already been heard) and rewriting a like
-  into a dislike would be worse than missing the signal. Removing the track that
-  is playing also advances playback, which a removal otherwise would not.
+  queue endpoint, whose removal *is* the judgement: the row leaves the list and
+  an unrated track is recorded as disliked in the same request, so the DJ does
+  not derive it again from the same similarity. The confirm names the removal —
+  the judgement is the host's side of it. A track that already carries a level
+  keeps it, because removing is often just queue housekeeping (clearing out what
+  has already been heard) and rewriting a like into a dislike would be worse
+  than missing the signal. Removing the track that is playing also advances
+  playback, which a removal otherwise would not.
 
 ## The AI DJ
 
@@ -546,7 +549,7 @@ Or run one file directly:
 node test/netease.test.mjs   # 32 pure: normalisation, quality ladder, likes, cookies, taste, player state
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 37 AI DJ: model call identity, route resolution, failure reporting, queue invariants
-node test/client.test.mjs    # 33 browser half: the engine against a fake DOM, and the page it pairs with
+node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
 node test/host.test.mjs      # 33 integration: routes, streaming, curation, quality, taste
 ```
 

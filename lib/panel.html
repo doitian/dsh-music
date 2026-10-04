@@ -342,6 +342,7 @@
           gestureNote: '在窗口任意处点击也可以',
           queueEmpty: '队列为空，用 AI DJ 或让助手补歌',
           remove: '移除',
+          removed: '已移除',
           loading: '加载中…',
           instrumental: '纯音乐，无歌词',
           other: '其他…',
@@ -430,6 +431,7 @@
           gestureNote: 'clicking anywhere works too',
           queueEmpty: 'Queue empty — use the AI DJ or ask the assistant to add songs',
           remove: 'Remove',
+          removed: 'Removed',
           loading: 'Loading…',
           instrumental: 'Instrumental',
           other: 'Other…',
@@ -988,14 +990,35 @@
       }
 
       /**
-       * Take one track out of the queue. The host records that as a dislike, so
-       * the row does not come straight back from the DJ's next batch — which is
-       * why this is the same endpoint the ✕ button uses, and not `/queue`.
+       * Take one track out of the queue.
+       *
+       * This is the queue endpoint, not `/taste`: the host drops the row and, in
+       * the same request, reads the removal as a dislike of a track that carries
+       * no level yet — so the row does not come straight back from the DJ's next
+       * batch. `/taste` alone only writes the level, which leaves the row in the
+       * list, and its NetEase half can be refused, which must never keep a row
+       * the click asked to remove.
+       *
+       * @returns {Promise<boolean>} whether the row really left the queue, so the
+       *   caller's confirm describes the removal the click asked for and not the
+       *   judgement the host makes of it.
        */
       async function removeFromList(index, button) {
         const track = state?.queue?.[index];
         if (!track) return false;
-        return sendTaste(track, 'disliked', button);
+        // The trip to NetEase is not instant on a cold cache, so a second click
+        // mid-flight is locked out, exactly as the transport switchers do.
+        if (button) button.disabled = true;
+        try {
+          state = await api('/queue', { method: 'POST', body: { action: 'remove', index } });
+          // Read the answer off the new queue: an index that named a row someone
+          // else had already dropped must not claim a removal that did not happen.
+          return !(state.queue || []).some((entry) => entry.id === track.id);
+        } finally {
+          // `render()` replaces the row markup, so this node may be detached —
+          // harmless, and it keeps a button the host refused usable.
+          if (button) button.disabled = false;
+        }
       }
 
       /**
@@ -1557,9 +1580,10 @@
             return;
           }
           if (remove) {
-            // Removing a track is also a dislike, so the row is confirmed the
-            // same way the ✕ button confirms one. The host records it.
-            if (await removeFromList(Number(remove.dataset.remove), remove)) toast(t('disliked'));
+            // The host drops the row and, for an unrated track, records the
+            // removal as the same dislike the transport ✕ makes — one request.
+            // The confirm names the click, not that side effect of it.
+            if (await removeFromList(Number(remove.dataset.remove), remove)) toast(t('removed'));
           } else if (jump !== undefined) {
             state = await api('/queue', { method: 'POST', body: { action: 'jump', index: Number(jump) } });
           } else return;

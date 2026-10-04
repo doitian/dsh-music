@@ -697,6 +697,27 @@ function applyTaste(state, trackId, level) {
 }
 
 /**
+ * Mirror one queue action onto the fake state, the way the host's `/queue` route
+ * does.
+ *
+ * Only a removal is modelled, because that is the one the page's rows ask for:
+ * the row leaves the list and the cursor follows it. The host reads an unrated
+ * removal as a dislike as well, which the snapshot cannot show afterwards — the
+ * row it belonged to is gone.
+ */
+function applyQueueAction(state, { action, index } = {}) {
+  if (action !== 'remove') return;
+  const at = Number(index);
+  if (!Number.isInteger(at) || at < 0 || at >= state.queue.length) return;
+  state.queue.splice(at, 1);
+  if (at < state.index) state.index -= 1;
+  else if (at === state.index) {
+    state.index = Math.min(state.index, state.queue.length - 1);
+    state.current = state.queue[state.index] ?? null;
+  }
+}
+
+/**
  * Boot `lib/panel.html` itself against a fake DOM.
  *
  * The page is inline script, so it runs through `new Function` with just the
@@ -750,8 +771,11 @@ async function bootPanel(options = {}) {
     if (custom) return custom;
     let body = {};
     // Every mutating route answers with the fresh snapshot, as the host does.
-    if (path === '/state' || path === '/control' || path === '/queue' || path === '/report') body = state;
-    else if (path === '/taste') {
+    if (path === '/state' || path === '/control' || path === '/report') body = state;
+    else if (path === '/queue') {
+      applyQueueAction(state, calls.at(-1).body);
+      body = state;
+    } else if (path === '/taste') {
       const { trackId, level } = calls.at(-1).body;
       applyTaste(state, trackId, level);
       body = state;
@@ -942,21 +966,54 @@ test('a dislike is the third level, and it skips the track', async () => {
   assert.equal(panel.state.current.disliked, false);
 });
 
-test('removing a row records a dislike through the same endpoint', async () => {
-  // The row's ✕ is a judgement about the track, not just about the list: the
-  // host marks it disliked so the DJ does not offer it again. That is why this
-  // is the taste endpoint and not `/queue`, and why it confirms like the ✕.
+test('removing a row takes the song out of the list', async () => {
+  // The row's ✕ is a judgement about the track as well as a removal, and the
+  // queue endpoint is where the host does both in one request: the row leaves
+  // the list and an unrated track is recorded as disliked, so the DJ does not
+  // offer it again. Read as `/taste` alone it only wrote the level and the row
+  // stayed, which is the bug this covers.
   const panel = await bootPanel({ state: queueState() });
+  assert.match(panel.element('queue').innerHTML, /T2/, 'the row starts in the list');
 
   await panel.element('queue').onclick(rowClick('remove', 1));
-  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 2, level: 'disliked' } });
-  assert.equal(panel.element('toast').textContent, 'Disliked');
-  assert.equal(panel.state.queue[1].disliked, true, 'and the row is gone with the level set');
-  assert.equal(panel.calls.some((call) => call.path === '/queue'), false, 'the removal is one request, not two');
+  assert.deepEqual(panel.calls.at(-1), { path: '/queue', body: { action: 'remove', index: 1 } });
+  assert.equal(panel.element('toast').textContent, 'Removed', 'the confirm names the removal, not the judgement');
+  assert.deepEqual(panel.state.queue.map((track) => track.id), [1], 'and the row is gone from the state');
+  assert.doesNotMatch(panel.element('queue').innerHTML, /T2/, 'and from the list the page drew');
+  assert.equal(panel.calls.some((call) => call.path === '/taste'), false, 'the removal is one request, not two');
 
   // Unlike a dislike from the transport row, this does not skip: nothing was
   // playing that the click asked to move past.
   assert.equal(panel.calls.some((call) => call.path === '/control'), false);
+});
+
+test('removing a row that carries a level confirms the removal, not a dislike', async () => {
+  // The host leaves a rated track's level alone — removing is often queue
+  // housekeeping — so the confirm names what the click did: the row is gone.
+  const panel = await bootPanel({ state: queueState({ liked: [2] }) });
+
+  await panel.element('queue').onclick(rowClick('remove', 1));
+  assert.deepEqual(panel.calls.at(-1), { path: '/queue', body: { action: 'remove', index: 1 } });
+  assert.deepEqual(panel.state.queue.map((track) => track.id), [1], 'the row leaves the list');
+  assert.equal(panel.element('toast').textContent, 'Removed');
+  assert.equal(panel.calls.some((call) => call.path === '/taste'), false, 'and its like is not rewritten');
+});
+
+test('removing the playing row adopts the track the host moved on to', async () => {
+  // The row's ✕ on the playing track is not just a list edit: the host drops
+  // the row and moves the cursor, so the page has to draw the new current track
+  // rather than one it no longer holds.
+  const panel = await bootPanel({ state: queueState({ currentId: 1 }) });
+
+  await panel.element('queue').onclick(rowClick('remove', 0));
+  // The new current track's lyrics are fetched after the render, so the removal
+  // is not necessarily the last call the page made.
+  assert.deepEqual(
+    panel.calls.find((call) => call.path === '/queue'),
+    { path: '/queue', body: { action: 'remove', index: 0 } },
+  );
+  assert.equal(panel.state.current.id, 2, 'playback moved to the next queued track');
+  assert.equal(panel.element('np-title').textContent, 'T2', 'and the transport row follows it');
 });
 
 test('a row removal cannot be fired twice while it is in flight', async () => {
@@ -967,7 +1024,7 @@ test('a row removal cannot be fired twice while it is in flight', async () => {
   const panel = await bootPanel({
     state: queueState(),
     handle: async (path) => {
-      if (path !== '/taste') return null;
+      if (path !== '/queue') return null;
       await gate;
       return { ok: true, status: 200, text: async () => JSON.stringify(panel.state) };
     },
@@ -980,7 +1037,7 @@ test('a row removal cannot be fired twice while it is in flight', async () => {
   // disabled on the way in.
   await null;
   assert.equal(button.disabled, true, 'the row is locked while the host answers');
-  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 2, level: 'disliked' } });
+  assert.deepEqual(panel.calls.at(-1), { path: '/queue', body: { action: 'remove', index: 1 } });
   release();
   await inFlight;
   assert.equal(button.disabled, false, 'and released afterwards, so the list stays usable');
@@ -994,6 +1051,10 @@ test('the taste labels follow the shell language', async () => {
   assert.equal(panel.element('like').title, '取消喜欢');
   assert.equal(panel.element('dislike').title, '不喜欢');
   assert.match(panel.element('queue').innerHTML, /title="取消喜欢"/, 'and the rows follow it too');
+
+  // The row's confirm comes from the page's own dictionary as well.
+  await panel.element('queue').onclick(rowClick('remove', 1));
+  assert.equal(panel.element('toast').textContent, '已移除');
 });
 
 test('a refused like says so in the page’s own language, and changes nothing', async () => {
