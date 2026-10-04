@@ -158,6 +158,28 @@ Then one of two tiers chooses:
   affinity, novelty against play history, and explicit like/dislike feedback,
   then interleaved so consecutive tracks do not share an artist.
 
+**Every model call carries a session identity.** A leaf call cannot set headers
+— `GenerateOptions` has no `headers` field — so `sessionId` is the only identity
+a plugin can give a provider, and each adapter maps it onto whatever that
+provider calls a per-conversation header: pi-ai emits `x-opencode-session` for
+the `opencode-go` route. Without it, a provider that keys on the conversation
+sees an anonymous client ignoring its conventions.
+
+The identity is minted once per install and persisted in `session.json`, so
+every plan and every restart stays inside one conversation; `dj.sessionId` pins
+it explicitly instead. A request with no identity is refused rather than sent
+bare, so the failure is a recorded `dj.modelError` rather than a silent one.
+
+Two other properties are worth knowing:
+
+- **The DJ is not an agent, and does not start one.** It is plugin code that
+  gathers candidates, makes one model call, and stocks the queue. Routing that
+  call through a DSH agent would buy conversation memory and an audit trail at
+  the cost of a session lifecycle (rotation, tool masking, disposal).
+- **The model tier is stateless.** Each plan sends its own pool and gets its
+  picks back; there is no accumulated transcript, no context growth and no drift
+  from a previous mood — which is the property, not a limitation, for this job.
+
 The model tier is optional and silent on failure; the DJ never blocks playback.
 It only ever **stocks the queue** — it never starts or stops playback, so a
 top-up while paused stays paused, and one that refills an empty queue after the
@@ -205,21 +227,35 @@ control back to the patch.
 Both names must be ones the host actually serves. `provider` is a registered
 adapter route — read them from the `llm-pi-ai` entry's `config.providers` (or
 ask the agent for `ctx.llm.listProviders()`); `model` is any id that route
-accepts. The simplest safe choice is to **mirror the session's own model**:
-whatever `agent-default-model` uses is known to work.
+accepts.
+
+**Pin it, or follow the session.** With both fields unset the DJ inherits
+`agent-default-model` — the same selection the composer's model picker writes,
+so it is the model the agent loop itself runs on — which is why "use my session
+model" needs no configuration. Pinning `dj.provider`/`dj.model` curates on
+something else instead, and pinning is what makes the two choices independent:
+
+```yaml
+- id: agent-default-model        # the agent loop / session model
+  config: { provider: opencode-go, model: deepseek-v4.1-flash }
+- id: music
+  config:
+    dj:                          # the DJ's own model, when you want a different one
+      provider: opencode-go
+      model: minimax-m3
+```
 
 Three things worth knowing:
 
 - **`config` is replaced, not merged.** The loader assigns the whole object
   (`entry.ts`: `this.options.config = value`), so if you also want, say,
   `audioLevel`, keep every option in one block. Schema defaults fill the rest.
-- **Discovery runs when you pin nothing, and its choice is arbitrary.** With no
-  config the DJ asks the mounted LLM service for its routes
-  (`listProviders()`), takes the first, then takes that route's first catalogue
-  entry. On this machine `opencode-go`'s catalogue is
+- **Discovery is the last resort, and its choice is arbitrary.** Only when
+  neither a pin nor `agent-default-model` exists does the DJ ask the mounted LLM
+  service for its routes (`listProviders()`), take the first, then take that
+  route's first catalogue entry. On this machine `opencode-go`'s catalogue is
   `minimax-m3, deepseek-v4-flash, gpt-5.6-luna`, so discovery curates with
-  **MiniMax-M3** — not a recommendation, just the first row. Pinning both fields
-  is the only way to know which model is curating.
+  **MiniMax-M3** — not a recommendation, just the first row.
 - **Partial pins are honoured.** A `provider` alone keeps that route and picks
   its first catalogue model; a `model` alone keeps that model on the first
   route.
@@ -228,7 +264,7 @@ Confirm it took effect:
 
 | Where | What to look for |
 |---|---|
-| `/music/health` | `dj.model` is your pinned pair; `dj.modelSource` is `panel`, `config` or `discovered`; `dj.lastRoute` is the route that actually curated the last batch; `dj.modelError` is `null` once the tier works |
+| `/music/health` | `dj.model` is your pinned pair; `dj.modelSource` is `panel`, `config`, `agent-default` or `discovered`; `dj.resolvedFrom` is what the last plan actually used (`pin`, `agent-default`, `discovered`); `dj.sessionModel` is the deployment's own model; `dj.lastRoute` is the route that curated the last batch; `dj.sessionId` is the identity every call carries; `dj.modelError` is `null` once the tier works |
 | Player, DJ status line | **AI DJ** plus the route (heuristic runs read **AI DJ (heuristic)**, and a declined tier prints the reason) |
 | **测试 Test** in the player | Answers "does this route work?" in one click, without touching the queue |
 | `music_dj` tool result | `AI DJ is on (model via opencode-go/deepseek-v4.1-flash)` |
@@ -240,6 +276,29 @@ service is present, names a half-configured pin (`opencode-go/?`), or carries
 the provider's own failure (a `LlmError` code such as `NO_ADAPTER`,
 `MISSING_CREDENTIAL`, `AUTH`, `RATE_LIMIT`). The heuristic tier covers that batch
 either way.
+
+**If a provider says your usage does not follow its conventions**, the first
+thing to check is the route's identity, not the request: pi-ai adds
+`x-opencode-session` only for its own catalog routes `opencode-go` and
+`opencode`. A hand-declared route id that merely points at
+`https://opencode.ai/zen/go/v1` gets no wrapper and therefore no header, with
+nothing in the logs to say so — keep the catalog route name. For the same
+reason, do not set `x-opencode-session` in a profile's `headers`: the adapter
+lets a configured value win over the generated one, which would freeze a single
+id across every conversation. What remains after that is entitlement rather
+than convention — a plan that only permits its own client's traffic cannot be
+satisfied by a header, only by delegating transport to that client.
+
+To see the bytes rather than trust the reasoning, run the bundled probe, point a
+route's `baseURL` at it for one plan, and read what actually leaves the process:
+
+```powershell
+npm run probe:headers          # http://127.0.0.1:8787 -> https://opencode.ai
+```
+
+You should see `x-opencode-session` carrying the DJ's id, and
+`user-agent: deepseek-harness/<version> (+…)` — attribution that must never be
+replaced by a provider-shaped one. Take the `baseURL` back out afterwards.
 
 Editing `config` recomposes the running host, but **the plugin module itself is
 cached** — restart the harness for the new route to take effect. If the model
@@ -267,6 +326,7 @@ add `config` to the inserted entry:
         dj:
           provider: opencode-go     # enables the model tier
           model: deepseek-v4.1-flash
+          sessionId: music-dj-mine  # optional: pin the provider-visible identity
 ```
 
 | Field | Default | Meaning |
@@ -275,7 +335,8 @@ add `config` to the inserted entry:
 | `dataDir` | `$DSH_HOME/music` | Where `session.json` (cookie, history, feedback, settings) lives. |
 | `audioLevel` | `exhigh` | Initial streaming quality, until the player's picker records a choice. One of the levels above; an unknown value falls back to `exhigh`. |
 | `requestTimeoutMs` | `15000` | Per-request deadline for NetEase calls. |
-| `dj.provider` / `dj.model` | unset | Model route for the DJ's model tier — see [Choosing the model](#choosing-the-model). Unset, the tier auto-discovers and falls back to heuristics on any failure. |
+| `dj.provider` / `dj.model` | unset | Model route for the DJ's model tier — see [Choosing the model](#choosing-the-model). Unset, the tier follows `agent-default-model` and only then falls back to discovery; any failure falls back to heuristics. |
+| `dj.sessionId` | minted, persisted | The identity every model call carries. Adapters map it onto the provider's per-conversation header. Pin it to control what a provider sees, or leave it unset and let the DJ mint one per install. |
 
 Player preferences (quality, DJ on/off, mood brief, batch size, extend
 threshold) are persisted in `session.json` and edited from the panel.
@@ -419,15 +480,16 @@ Or run one file directly:
 
 ```powershell
 node test/netease.test.mjs   # 16 pure: normalisation, quality ladder, cookies, player state
-node test/dj.test.mjs        # 31 AI DJ: model tier, failure reporting, picker listing, queue invariants
+node test/dj.test.mjs        # 37 AI DJ: model call identity, route resolution, failure reporting, queue invariants
 node test/client.test.mjs    # 18 browser half, executed against a fake DOM
 node test/host.test.mjs      # 23 integration: routes, streaming, curation, quality
 ```
 
-The DJ tests drive the model tier with a stub `ctx.llm.stream()` that emits the
-documented chunks, so the pinned-route happy path, both chunk spellings
-(`type`/`kind`), index filtering, prose-wrapped JSON, discovery, and every
-fallback are covered without a provider.
+The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented
+chunks, and stub `ctx.agentDefaultModel` for route inheritance. So the
+pinned-route happy path, both chunk spellings (`type`/`kind`), index filtering,
+prose-wrapped JSON, the session identity every call must carry, inheritance from
+the session model, discovery, and every fallback are covered without a provider.
 
 The integration tests mount the plugin against stand-in `tools`/`webServer`
 services and drive the captured route over a real `node:http` server, so they
@@ -507,10 +569,16 @@ workflow, tag, and commit — `npm view @doitian/dsh-music@<version> dist.attest
   fed to the DJ instead.
 - **`apiPrefix` must stay `music`** unless `BASE` in `lib/client.js` is changed
   to match.
-- **The DJ's model tier is covered against the stub stream contract, not a live
-  provider** — no adapter was configured where this was built, so request
-  building, the pinned route, both chunk spellings, index filtering and every
-  fallback are tested, but a real end-to-end model call has not been observed
-  here. The heuristic tier is what the live runs exercised.
+- **The DJ's model tier is covered against stub contracts, not a live
+  provider** — request building, the session identity, route resolution, both
+  chunk spellings, index filtering and every fallback are tested, but a real
+  end-to-end model call has not been observed here. The heuristic tier is what
+  the live runs exercised.
+- **The identity only becomes a header on the catalog routes that define one.**
+  pi-ai adds `x-opencode-session` for its own `opencode-go`/`opencode` routes. A
+  hand-declared route id pointing at the same endpoint gets no wrapper, so the
+  header is simply absent — keep the catalog route name, and never pin
+  `x-opencode-session` in a profile's `headers` (a configured value wins over
+  the generated one and freezes a single id for every conversation).
 - **Chromium autoplay policy** may block playback the agent starts before the
   user has interacted with the page; the panel then shows a *click to play* hint.

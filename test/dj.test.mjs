@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { AiDj } from '../lib/dj.js';
+import { AiDj, curationRequest, curationSessionId } from '../lib/dj.js';
 import { Player } from '../lib/state.js';
 import { SessionStore } from '../lib/session.js';
 
@@ -97,8 +97,13 @@ function makeLlm({ reply, fail, kind = 'type', providers, models, chunks } = {})
   };
 }
 
-/** Build a DJ over real Player/SessionStore and stub everything external. */
-function makeDj({ api = makeApi(), llm, model = {} } = {}) {
+/**
+ * Build a DJ over real Player/SessionStore and stub everything external.
+ *
+ * `agentDefault` stands in for `ctx.agentDefaultModel.currentSelection()` — the
+ * model the agent loop itself runs on, which an unpinned DJ follows.
+ */
+function makeDj({ api = makeApi(), llm, model = {}, agentDefault = null, sessionId } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-dj-'));
   const store = new SessionStore({ file: path.join(dataDir, 'session.json') });
   store.load();
@@ -109,6 +114,8 @@ function makeDj({ api = makeApi(), llm, model = {} } = {}) {
     player,
     store,
     resolveLlm: () => llm,
+    readAgentDefault: () => agentDefault,
+    sessionId,
     logger: { info() {}, warn() {}, debug() {} },
     model,
   });
@@ -268,6 +275,120 @@ test('an empty pick list falls back to the heuristic tier', async () => {
     const plan = await harness.dj.plan({ count: 2 });
     assert.equal(plan.source, 'heuristic');
     assert.equal(plan.tracks.length, 2);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// ------------------------------------- model-call identity (the header)
+
+test('every model call carries the DJ session identity', async () => {
+  const llm = makeLlm({ reply: picks(1) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    await harness.dj.plan({ count: 1 });
+
+    // A leaf call cannot set headers: the session id is the only identity lever
+    // a plugin has, and each adapter maps it onto its provider's own
+    // per-conversation header.
+    const call = llm.calls[0];
+    assert.equal(typeof call.sessionId, 'string');
+    assert.ok(call.sessionId.length > 0, 'an empty id is falsy, and pi-ai skips the header for it');
+    assert.match(call.sessionId, /^music-dj-[0-9a-f-]{36}$/);
+    assert.equal(call.headers, undefined, 'a leaf call has no headers to set');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the identity is minted once, persisted, and per install', async () => {
+  const first = makeDj({ llm: makeLlm({ reply: picks(0) }), model: { provider: 'p', model: 'm' } });
+  let minted;
+  try {
+    minted = first.dj.sessionId;
+    assert.equal(minted.length > 0, true);
+    assert.equal(first.store.settings.djSessionId, minted, 'it is written to session.json');
+    assert.equal(curationSessionId(first.store), minted, 'a reload resumes the same conversation');
+  } finally {
+    first.cleanup();
+  }
+
+  const second = makeDj({ llm: makeLlm({ reply: picks(0) }), model: { provider: 'p', model: 'm' } });
+  try {
+    assert.notEqual(second.dj.sessionId, minted, 'another install is another conversation');
+  } finally {
+    second.cleanup();
+  }
+});
+
+test('a configured identity wins over the minted one', async () => {
+  const harness = makeDj({
+    llm: makeLlm({ reply: picks(0) }),
+    model: { provider: 'p', model: 'm' },
+    sessionId: 'music-dj-pinned',
+  });
+  try {
+    assert.equal(harness.dj.sessionId, 'music-dj-pinned');
+    assert.equal(harness.store.settings.djSessionId, '', 'a configured id is not written over the stored one');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a request without an identity is refused instead of sent bare', () => {
+  const target = { provider: 'p', model: 'm' };
+  assert.throws(() => curationRequest({ target, messages: [], sessionId: '' }), /sessionId/);
+  assert.throws(() => curationRequest({ target, messages: [] }), /sessionId/);
+
+  const request = curationRequest({ target, messages: [], sessionId: 'music-dj-x' });
+  assert.deepEqual(request, { provider: 'p', model: 'm', messages: [], sessionId: 'music-dj-x' });
+  assert.equal('headers' in request, false);
+});
+
+// ------------------------------------------------- where the route comes from
+
+test('an unpinned DJ follows the session model instead of discovery', async () => {
+  // The catalogue would offer xiaomi first; the deployment's own model must win,
+  // because that is the model the agent loop itself runs on.
+  const llm = makeLlm({
+    reply: picks(0),
+    providers: [{ id: 'xiaomi-token-plan-cn' }],
+    models: { 'xiaomi-token-plan-cn': [{ id: 'qwen3-max' }] },
+  });
+  const session = { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'high' };
+  const harness = makeDj({ llm, agentDefault: session });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+
+    assert.equal(plan.route, 'opencode-go/deepseek-v4.1-flash', 'the session model is the default, not the first route');
+    assert.equal(harness.dj.resolvedFrom, 'agent-default');
+    assert.equal(llm.calls[0].provider, 'opencode-go');
+    assert.equal(llm.calls[0].sessionId, harness.dj.sessionId);
+
+    const status = harness.dj.modelStatus();
+    assert.equal(status.sessionModel, 'opencode-go/deepseek-v4.1-flash');
+    assert.equal(status.pinned, null);
+    assert.equal(status.resolvedFrom, 'agent-default');
+    assert.equal(status.sessionId, harness.dj.sessionId);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a pinned route overrides the session model', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({
+    llm,
+    model: { provider: 'opencode-go', model: 'minimax-m3' },
+    agentDefault: { provider: 'deepseek-official', model: 'deepseek-chat' },
+  });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+
+    assert.equal(plan.route, 'opencode-go/minimax-m3');
+    assert.equal(harness.dj.resolvedFrom, 'pin');
+    assert.equal(harness.dj.modelStatus().pinned, 'opencode-go/minimax-m3');
+    assert.equal(llm.calls[0].model, 'minimax-m3');
   } finally {
     harness.cleanup();
   }

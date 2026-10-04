@@ -13,6 +13,20 @@
 #   requestTimeoutMs   NetEase request deadline (default 15000).
 #   dj.provider        model route for the AI DJ's model tier, e.g. opencode-go.
 #   dj.model           exact model id, e.g. deepseek-v4.1-flash.
+#   dj.sessionId       the identity every model call carries. A leaf call cannot
+#                      set headers, so this string is the only identity the DJ
+#                      can give a provider — and each adapter maps it onto that
+#                      provider's own per-conversation header (pi-ai emits
+#                      `x-opencode-session` for the `opencode-go` route). Left
+#                      unset, one is minted on first use and persisted in
+#                      session.json, so every plan and restart stays inside one
+#                      conversation.
+#
+# Route resolution, highest first: the player's picker -> `dj.provider`/`dj.model`
+# -> the deployment's own `agent-default-model` (the model the agent loop runs
+# on, which is why "use my session model" needs no configuration) -> discovery,
+# whose first row is arbitrary. The DJ is not an agent and starts none: each
+# plan is one stateless leaf call, so there is no session to rotate or dispose.
 #
 # Without `dj.provider`/`dj.model` the DJ still works: it falls back to scoring
 # similar songs, the daily recommendations and the charts by the listener's

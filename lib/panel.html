@@ -876,7 +876,12 @@
           renderModelOptions();
 
           $('dj-model-source').textContent =
-            { panel: '面板 / panel', config: '配置 / profile', discovered: '自动 / auto' }[data.source] ?? data.source ?? '';
+            {
+              panel: '面板 / panel',
+              config: '配置 / profile',
+              'agent-default': '会话模型 / session model',
+              discovered: '自动 / auto',
+            }[data.source] ?? data.source ?? '';
           $('dj-model-status').textContent = data.error ?? '';
         } catch (error) {
           // A 404 here means this page is newer than the host module: the page
