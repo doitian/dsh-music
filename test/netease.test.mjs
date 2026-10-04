@@ -1,5 +1,6 @@
 /**
- * Pure unit tests: track normalisation, the cookie jar, and player state.
+ * Pure unit tests: track normalisation, the cookie jar, the like endpoints,
+ * player state, and the taste levels the DJ reads.
  *
  * No network. Run with `node test/netease.test.mjs`.
  *
@@ -7,10 +8,14 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { CookieJar, LEVELS, Netease, isLevel, normalizeTrack, resizeImage } from '../lib/netease.js';
+import { SessionStore, TASTE_LEVELS } from '../lib/session.js';
 import { Player } from '../lib/state.js';
 
 // --------------------------------------------------------------- fixtures
@@ -259,6 +264,208 @@ test('fetchAudio still aborts when the headers never arrive', async () => {
   }
 });
 
+// -------------------------------------------------------------- like endpoints
+
+/** A client whose like endpoints answer from a scripted table. */
+function likeClient(handler, { authenticated = true } = {}) {
+  const api = new Netease({ cookie: authenticated ? 'MUSIC_U=fake' : 'os=pc' });
+  const calls = [];
+  api.call = async (endpoint, options = {}) => {
+    calls.push({ endpoint, method: options.method, query: options.query });
+    return handler(endpoint, options);
+  };
+  return { api, calls };
+}
+
+test('likeSong asks for the direction it was given, not a toggle', async () => {
+  const { api, calls } = likeClient(() => ({ playlistId: 12434976821, code: 200 }));
+
+  const liked = await api.likeSong(42, true);
+  assert.equal(calls[0].endpoint, '/api/song/like');
+  assert.equal(calls[0].method, 'POST', 'a write, not a read');
+  assert.deepEqual(calls[0].query, { trackId: 42, like: true });
+  assert.deepEqual(liked, { ok: true, id: 42, liked: true, playlistId: 12434976821 });
+
+  const removed = await api.likeSong(42, false);
+  assert.deepEqual(calls[1].query, { trackId: 42, like: false }, 'removing the like is its own request');
+  assert.equal(removed.liked, false);
+  assert.equal(removed.ok, true);
+});
+
+test('likeSong reports a refusal with NetEase\'s own reason', async () => {
+  // A delisted track answers 400 with a message rather than a code the caller
+  // can act on, and an anonymous session answers 301.
+  const { api } = likeClient(() => ({ code: 400, message: '歌曲已经下架了' }));
+  const refused = await api.likeSong(42, true);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 400);
+  assert.match(refused.reason, /下架/);
+
+  const anonymous = await likeClient(() => ({ code: 301, message: '系统错误' }), { authenticated: false }).api.likeSong(42, true);
+  assert.equal(anonymous.ok, false);
+  assert.equal(anonymous.code, 301);
+});
+
+test('likeSong never asks about an id that is not one', async () => {
+  const { api, calls } = likeClient(() => ({ code: 200 }));
+  const refused = await api.likeSong('not-a-track', true);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'BAD_ID');
+  assert.deepEqual(calls, []);
+});
+
+test('likedIds reads the liked subset of a bracketed id list', async () => {
+  const { api, calls } = likeClient(() => ({ ids: [2], code: 200 }));
+  const result = await api.likedIds([1, 2, 2, 'nonsense']);
+
+  assert.equal(calls[0].endpoint, '/api/song/like/check');
+  assert.equal(calls[0].method, undefined, 'a plain read');
+  assert.equal(calls[0].query.trackIds, '[1,2]', 'deduplicated, and only real ids');
+  assert.deepEqual(result, { ok: true, ids: [2] });
+});
+
+test('likedIds treats a refusal as a refusal, not as nothing liked', async () => {
+  const { api } = likeClient(() => ({ code: 301, message: '系统错误' }));
+  const refused = await api.likedIds([7]);
+  assert.equal(refused.ok, false, 'the caller must be able to tell this from "not liked"');
+  assert.equal(refused.code, 301);
+  assert.deepEqual(refused.ids, []);
+});
+
+test('likedIds does not spend a request on an empty question', async () => {
+  const { api, calls } = likeClient(() => ({ ids: [], code: 200 }));
+  assert.deepEqual(await api.likedIds([]), { ok: true, ids: [] });
+  assert.deepEqual(calls, [], 'NetEase answers an empty batch with code 400 anyway');
+});
+
+test('likedPlaylistIds reads the whole like list in one pass', async () => {
+  // The likes are a playlist (`specialType: 5`) whose `trackIds` come back
+  // complete regardless of `n`, so one read reconciles a mirror of any size.
+  const { api, calls } = likeClient((endpoint) =>
+    endpoint === '/api/user/playlist'
+      ? {
+          playlist: [
+            { id: 8, name: 'Collected', specialType: 0, trackCount: 12 },
+            { id: 9, name: '我喜欢的音乐', specialType: 5, trackCount: 3 },
+          ],
+        }
+      : { playlist: { trackIds: [{ id: 3 }, { id: 1 }, { id: 3 }] } },
+  );
+
+  assert.deepEqual(await api.likedPlaylistIds(7), [3, 1, 3]);
+  assert.deepEqual(calls[0], { endpoint: '/api/user/playlist', method: undefined, query: { uid: 7, offset: 0, limit: 1000 } });
+  assert.deepEqual(calls[1], { endpoint: '/api/v6/playlist/detail', method: undefined, query: { id: 9, n: 1 } });
+});
+
+test('likedPlaylistIds answers null rather than an empty account', async () => {
+  // `null` and `[]` mean different things: the caller must not wipe a mirror
+  // because the account could not be read.
+  const anonymous = likeClient(() => ({}));
+  assert.equal(await anonymous.api.likedPlaylistIds(), null);
+  assert.deepEqual(anonymous.calls, [], 'no account, no request');
+
+  const noLiked = likeClient(() => ({ playlist: [{ id: 8, name: 'Collected', specialType: 0 }] }));
+  assert.equal(await noLiked.api.likedPlaylistIds(7), null);
+});
+
+// ---------------------------------------------------------------- taste levels
+
+/** A store over a throwaway file, so `touch()` has somewhere to write. */
+function tempStore() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-taste-'));
+  const store = new SessionStore({ file: path.join(dir, 'session.json') });
+  store.dir = dir;
+  store.dispose = () => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  };
+  return store;
+}
+
+test('a track holds exactly one taste level', () => {
+  assert.deepEqual(TASTE_LEVELS, ['liked', 'none', 'disliked']);
+  const store = tempStore();
+  try {
+    assert.equal(store.taste(42), 'none', 'unrated to begin with');
+
+    store.setTaste(42, 'liked');
+    assert.equal(store.taste(42), 'liked');
+    assert.deepEqual(store.feedback.likes, [42]);
+    store.setTaste(42, 'liked');
+    assert.deepEqual(store.feedback.likes, [42], 'setting the same level twice is not a duplicate');
+
+    // A like and a dislike are the same three levels, not two flags.
+    store.setTaste(42, 'disliked');
+    assert.equal(store.taste(42), 'disliked');
+    assert.deepEqual(store.feedback.likes, [], 'the like is gone');
+    assert.deepEqual(store.feedback.dislikes, [42]);
+
+    store.setTaste(42, 'none');
+    assert.equal(store.taste(42), 'none');
+    assert.deepEqual(store.feedback.dislikes, []);
+  } finally {
+    store.dispose();
+  }
+});
+
+test('an unknown level or track id changes nothing', () => {
+  const store = tempStore();
+  try {
+    store.setTaste(1, 'sideways');
+    store.setTaste('not-a-track', 'liked');
+    assert.deepEqual(store.feedback, { likes: [], dislikes: [], skips: [] });
+  } finally {
+    store.dispose();
+  }
+});
+
+test('the liked mirror can be reconciled with the account', () => {
+  const store = tempStore();
+  try {
+    store.setTaste(1, 'liked');
+    store.setTaste(2, 'disliked');
+
+    store.setLikedIds([5, 5, 'nonsense', 6]);
+    assert.deepEqual(store.feedback.likes, [5, 6], 'deduplicated, and only real ids');
+    assert.equal(store.taste(1), 'none', 'a like the account does not have is dropped');
+    assert.deepEqual(store.feedback.dislikes, [2], 'a dislike is local, so it survives');
+  } finally {
+    store.dispose();
+  }
+});
+
+test('recordFeedback is the toggle spelling of the same levels', () => {
+  const store = tempStore();
+  try {
+    store.recordFeedback('likes', 7);
+    assert.deepEqual(store.feedback.likes, [7]);
+    store.recordFeedback('likes', 7);
+    assert.deepEqual(store.feedback.likes, [], 'the second click takes the like back');
+
+    store.recordFeedback('dislikes', 7);
+    assert.deepEqual(store.feedback.dislikes, [7]);
+    store.recordFeedback('likes', 7);
+    assert.equal(store.taste(7), 'liked', 'liking a disliked track replaces the level');
+    assert.deepEqual(store.feedback.dislikes, []);
+  } finally {
+    store.dispose();
+  }
+});
+
+test('skips stay counters rather than membership', () => {
+  const store = tempStore();
+  try {
+    store.recordFeedback('skips', 3);
+    store.recordFeedback('skips', 3);
+    assert.deepEqual(store.feedback.skips, [3, 3], 'each skip is an occurrence');
+    assert.equal(store.taste(3), 'none', 'a skip is not a taste level');
+    store.recordFeedback('shrug', 3);
+    assert.deepEqual(store.feedback.skips, [3, 3], 'an unknown kind is ignored');
+  } finally {
+    store.dispose();
+  }
+});
+
 // ------------------------------------------------------------ player state
 test('the player preserves metadata on an already-normalized track', () => {
   const player = new Player();
@@ -366,6 +573,36 @@ test('volume, mute and mode are clamped and ignore no-ops', () => {
   assert.equal(player.mode, 'list', 'an unknown mode is ignored');
   player.setMuted(true);
   assert.equal(player.muted, true);
+});
+
+test('removing a queue position reports what left', () => {
+  // The report is the point: the caller cannot read the track off the queue
+  // afterwards, because the row whose index it asked about is the one that is
+  // gone — and removing a track is a judgement about the track.
+  const player = new Player();
+  player.setQueue([1, 2, 3].map((id) => ({ id, name: `T${id}`, artists: ['A'], duration: 1000 })));
+  player.jump(1);
+
+  const middle = player.removeAt(1);
+  assert.equal(middle.track.id, 2);
+  assert.equal(middle.wasCurrent, true, 'it was the playing one');
+  assert.deepEqual(middle.snapshot.queue.map((track) => track.id), [1, 3]);
+  assert.equal(middle.snapshot.index, 1, 'and the next track took its place');
+
+  const other = player.removeAt(1);
+  assert.equal(other.track.id, 3);
+  assert.equal(other.wasCurrent, true, 'the cursor is on the same index again');
+
+  const queued = player.removeAt(0);
+  assert.equal(queued.wasCurrent, true);
+  assert.equal(queued.snapshot.queue.length, 0);
+
+  // An index that is not there removes nothing and reports nothing, so a caller
+  // cannot mistake it for a track it just rejected.
+  const nowhere = player.removeAt(5);
+  assert.equal(nowhere.track, null);
+  assert.equal(nowhere.wasCurrent, false);
+  assert.equal(nowhere.snapshot.queue.length, 0);
 });
 
 test('clearing the queue resets the cursor and transport', () => {

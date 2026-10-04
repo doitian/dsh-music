@@ -78,6 +78,16 @@
       .row .dur { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; }
       .row .acts { display: none; gap: 4px; flex: none; }
       .row:hover .acts { display: flex; }
+      /* The list's own like control. A liked track keeps its filled heart
+         visible; the hollow one only appears on hover, so an unrated list is
+         not a wall of outlines. */
+      .row .heart {
+        background: none; border: 0; padding: 0; width: 16px; flex: none;
+        font-size: 14px; line-height: 1; color: var(--muted); opacity: 0;
+        transition: opacity 0.12s;
+      }
+      .row:hover .heart { opacity: 1; }
+      .row .heart.on { opacity: 1; color: var(--accent); }
 
       .now { padding: 14px; border-bottom: 1px solid var(--line); }
       .now-top { display: flex; gap: 14px; }
@@ -92,8 +102,17 @@
       .controls { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
       .controls .grow { flex: 1; }
       .icon { font-size: 15px; line-height: 1; }
+      /* A filled heart means the track is liked on the account. */
+      #like.on, #dislike.on {
+        color: #fff;
+        background: var(--accent);
+        border-color: var(--accent);
+      }
       #volume { flex: 0 0 88px; }
       .mode { font-size: 12px; }
+      /* The trip to NetEase is not instant on a cold cache; a click has to look
+         like it landed before the rows come back. */
+      button:disabled { cursor: default; }
 
       .section-title { padding: 12px 14px 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
       .section-title.head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -173,8 +192,10 @@
               <select id="quality" class="mode" data-i18n-title="qualityTitle" title="Streaming quality"></select>
               <span id="quality-info" class="mode" style="color: var(--muted)"></span>
               <span class="grow"></span>
-              <button id="like" data-i18n-title="like" title="Like">♡</button>
-              <button id="dislike" data-i18n-title="dislike" title="Dislike">✕</button>
+              <!-- Labels are state-dependent (a filled heart un-likes), so the
+                   script owns text and title rather than data-i18n. -->
+              <button id="like" title="Like">♡</button>
+              <button id="dislike" title="Dislike">✕</button>
               <button id="mute" data-i18n-title="mute" title="Mute">🔊</button>
               <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
             </div>
@@ -261,7 +282,10 @@
           modeShuffle: '随机',
           qualityTitle: '流媒体音质',
           like: '喜欢',
+          unlike: '取消喜欢',
           dislike: '不喜欢',
+          undislike: '取消不喜欢',
+          likeNeedsSignIn: '登录后才能在网易云标记喜欢',
           mute: '静音',
           lyrics: '歌词',
           lyricsHide: '收起',
@@ -315,6 +339,7 @@
           downgraded: '已降级',
           qualitySet: '音质已设为 {level}',
           liked: '已喜欢',
+          unliked: '已取消喜欢',
           disliked: '不再推荐',
           djOn: 'AI DJ 已开启',
           djOff: 'AI DJ 已关闭',
@@ -343,7 +368,10 @@
           modeShuffle: 'Shuffle',
           qualityTitle: 'Streaming quality',
           like: 'Like',
+          unlike: 'Unlike',
           dislike: 'Dislike',
+          undislike: 'Undislike',
+          likeNeedsSignIn: 'Sign in to NetEase to like tracks',
           mute: 'Mute',
           lyrics: 'Lyrics',
           lyricsHide: 'Hide',
@@ -397,6 +425,7 @@
           downgraded: 'downgraded',
           qualitySet: 'Quality set to {level}',
           liked: 'Liked',
+          unliked: 'Like removed',
           disliked: 'Disliked',
           djOn: 'AI DJ on',
           djOff: 'AI DJ off',
@@ -456,6 +485,10 @@
         // the new language.
         $('gesture')?.remove();
         render();
+        // The taste titles carry no `data-i18n`, and `render()` needs a state
+        // document, so they are painted here as well — otherwise a zh shell
+        // shows them in English until the first poll lands.
+        paintTaste();
         paintModelSource();
         paintQualityOptions();
         if (modelRoutes.length) renderModelOptions();
@@ -507,8 +540,24 @@
         const text = await response.text();
         let data;
         try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text.slice(0, 200) }; }
-        if (!response.ok) throw new Error(data.error || data.message || 'HTTP ' + response.status);
+        if (!response.ok) {
+          const error = new Error(data.error || data.message || 'HTTP ' + response.status);
+          // The host's machine-usable half. This page localizes around it
+          // (login does the same) instead of showing a raw English sentence.
+          if (data.code) error.code = data.code;
+          throw error;
+        }
         return data;
+      }
+
+      /**
+       * Tell the host a user-facing failure in the page's own language when the
+       * reason is one the page knows, and let the host's words through when it
+       * is not (a NetEase refusal carries its own explanation).
+       */
+      function failureText(error) {
+        if (error.code === 'ANONYMOUS') return t('likeNeedsSignIn');
+        return error.message;
       }
 
       // ------------------------------------------------------------- transport
@@ -843,6 +892,7 @@
         paintQualityInfo();
 
         renderQueue();
+        paintTaste();
         paintProgress();
       }
 
@@ -861,11 +911,71 @@
               <img src="${esc(track.picUrl || '')}" alt="" loading="lazy">
               <span class="meta"><span class="name">${esc(track.name)}</span><span class="sub">${esc((track.artists || []).join(' / '))}</span></span>
               ${track.vip ? '<span class="tag">VIP</span>' : ''}
+              <button class="heart ${track.liked ? 'on' : ''}" data-like="${index}" title="${esc(t(track.liked ? 'unlike' : 'like'))}">${track.liked ? '♥' : '♡'}</button>
               <span class="dur">${fmt(track.duration)}</span>
               <span class="acts"><button data-remove="${index}" title="${esc(t('remove'))}">✕</button></span>
             </div>`;
           })
           .join('');
+      }
+
+      /**
+       * The transport row's taste controls mirror the current track.
+       *
+       * A filled heart is the account's like and a filled ✕ the local dislike,
+       * and a click moves the track to the *other* level — so the label has to
+       * say which direction, which is why the titles are painted here rather
+       * than carried as `data-i18n` on the markup.
+       */
+      function paintTaste() {
+        const track = state?.current;
+        const liked = Boolean(track?.liked);
+        const disliked = Boolean(track?.disliked);
+        $('like').textContent = liked ? '♥' : '♡';
+        $('like').classList.toggle('on', liked);
+        $('like').title = t(liked ? 'unlike' : 'like');
+        $('dislike').classList.toggle('on', disliked);
+        $('dislike').title = t(disliked ? 'undislike' : 'dislike');
+      }
+
+      /**
+       * Take one track out of the queue. The host records that as a dislike, so
+       * the row does not come straight back from the DJ's next batch — which is
+       * why this is the same endpoint the ✕ button uses, and not `/queue`.
+       */
+      async function removeFromList(index, button) {
+        const track = state?.queue?.[index];
+        if (!track) return false;
+        return sendTaste(track, 'disliked', button);
+      }
+
+      /**
+       * Move one track to a taste level on the host and adopt its answer.
+       *
+       * `liked` and `none` change the NetEase account and need a session, which
+       * the host reports as `code: ANONYMOUS`; `disliked` is local, so it always
+       * applies. Returns whether the level really moved, so a caller's toast
+       * cannot claim a like NetEase refused.
+       */
+      async function sendTaste(track, level, button) {
+        // The trip to NetEase is not instant on a cold cache. This guards
+        // against a second click mid-flight; the row still updates at the end,
+        // in the same frame as the toast, so the lag is honest rather than
+        // promised.
+        if (button) button.disabled = true;
+        try {
+          state = await api('/taste', { method: 'POST', body: { trackId: track.id, level } });
+          render();
+          applyTransport();
+          return true;
+        } catch (error) {
+          toast(failureText(error));
+          return false;
+        } finally {
+          // `render()` replaces the row markup, so this node may be detached —
+          // harmless, and it keeps the transport buttons (which are not) usable.
+          if (button) button.disabled = false;
+        }
       }
 
       function paintProgress() {
@@ -1290,8 +1400,27 @@
       $('seek').onchange = (event) => {
         control({ action: 'seek', value: Math.round((Number(event.target.value) / 1000) * durationMs()) });
       };
-      $('like').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'likes', trackId: state.current.id } }).then(() => toast(t('liked')));
-      $('dislike').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'dislikes', trackId: state.current.id } }).then(() => { toast(t('disliked')); control({ action: 'next' }); });
+      // Both taste buttons are switchers: the filled state is the one that
+      // removes, so the click asks the host for the level it moves to.
+      $('like').onclick = async (event) => {
+        const track = state?.current;
+        if (!track) return;
+        if (await sendTaste(track, track.liked ? 'none' : 'liked', event?.currentTarget)) {
+          toast(t(track.liked ? 'unliked' : 'liked'));
+        }
+      };
+      $('dislike').onclick = async (event) => {
+        const track = state?.current;
+        if (!track) return;
+        if (track.disliked) {
+          await sendTaste(track, 'none', event?.currentTarget);
+          return;
+        }
+        if (await sendTaste(track, 'disliked', event?.currentTarget)) {
+          toast(t('disliked'));
+          control({ action: 'next' });
+        }
+      };
 
       $('dj-toggle').onclick = async () => {
         try {
@@ -1304,17 +1433,27 @@
       $('dj-prompt').onchange = () => api('/dj', { method: 'POST', body: { prompt: $('dj-prompt').value, enabled: state?.dj?.enabled } }).then((data) => { state = data; render(); }).catch((error) => toast(error.message));
 
       $('queue').onclick = async (event) => {
+        const like = event.target.closest('[data-like]');
         const jump = event.target.closest('[data-jump]')?.dataset.jump;
-        const remove = event.target.closest('[data-remove]')?.dataset.remove;
+        const remove = event.target.closest('[data-remove]');
         try {
-          if (remove !== undefined) {
-            state = await api('/queue', { method: 'POST', body: { action: 'remove', index: Number(remove) } });
+          // A heart inside a row must not also count as "play this row".
+          if (like) {
+            const track = state?.queue?.[Number(like.dataset.like)];
+            if (!track) return;
+            await sendTaste(track, track.liked ? 'none' : 'liked', like);
+            return;
+          }
+          if (remove) {
+            // Removing a track is also a dislike, so the row is confirmed the
+            // same way the ✕ button confirms one. The host records it.
+            if (await removeFromList(Number(remove.dataset.remove), remove)) toast(t('disliked'));
           } else if (jump !== undefined) {
             state = await api('/queue', { method: 'POST', body: { action: 'jump', index: Number(jump) } });
           } else return;
           render();
           pokeEngine();
-        } catch (error) { toast(error.message); }
+        } catch (error) { toast(failureText(error)); }
       };
 
       // ------------------------------------------------------------------ boot

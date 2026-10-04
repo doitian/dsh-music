@@ -202,6 +202,9 @@ test('serves health, the panel page, and the vendored QR encoder', async () => {
     ]);
     assert.ok(health.body.dataDir, 'health should report the data directory');
     assert.equal(health.body.dj.model, null, 'no DJ model is configured in tests');
+    // The like cache answers why a heart is empty; an anonymous session never
+    // asks, so it holds nothing and has nothing to report.
+    assert.deepEqual(health.body.likes, { cached: 0, pending: 0, error: null });
 
     const panel = await app.json('/music/panel');
     assert.equal(panel.status, 200);
@@ -581,20 +584,284 @@ test('queue, transport and reporting round-trip through the API', async () => {
   }
 });
 
-test('feedback is recorded and survives the session file', async () => {
+// -------------------------------------------------------------- taste + likes
+
+/** Three tracks with distinct ids, for the taste round-trips. */
+const TASTE_TRACKS = [
+  { id: 111, name: 'First', artists: ['A'], album: 'X', duration: 1000, fee: 0 },
+  { id: 222, name: 'Second', artists: ['B'], album: 'Y', duration: 2000, fee: 8 },
+  { id: 333, name: 'Third', artists: ['C'], album: 'Z', duration: 3000, fee: 0 },
+];
+
+test('removing a queued track records a dislike, so the DJ stops offering it', async () => {
   const app = await mount();
   try {
-    const liked = await app.post('/music/api/feedback', { kind: 'likes', trackId: 42 });
-    assert.equal(liked.status, 200);
-    assert.deepEqual(liked.body.feedback.likes, [42]);
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
 
-    // Liking and disliking are mutually exclusive.
-    const disliked = await app.post('/music/api/feedback', { kind: 'dislikes', trackId: 42 });
-    assert.deepEqual(disliked.body.feedback.likes, []);
-    assert.deepEqual(disliked.body.feedback.dislikes, [42]);
+    const removed = await app.post('/music/api/queue', { action: 'remove', index: 1 });
+    assert.equal(removed.status, 200);
+    assert.deepEqual(removed.body.queue.map((track) => track.id), [111, 333]);
+    // The snapshot already carries it: the answer describes the queue the click
+    // produced, and the judgement is part of it.
+    assert.equal(removed.body.queue.some((track) => track.disliked), false, 'the removed row is no longer there to read');
+    assert.deepEqual(app.readSession().feedback.dislikes, [222]);
 
-    const bad = await app.post('/music/api/feedback', { kind: 'shrug', trackId: 1 });
-    assert.equal(bad.status, 400);
+    // And the DJ will not re-offer it: the candidate pool excludes the disliked.
+    const dj = app.harness.tools.get('music_dj');
+    await dj.execute({ replan: true, count: 5 }, {});
+    const state = await app.json('/music/api/state');
+    assert.equal(state.body.queue.some((track) => track.id === 222), false, 'a removed track must not come back');
+  } finally {
+    await app.close();
+  }
+});
+
+test('removing the playing track marks it and moves on', async () => {
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 1 });
+    const current = await app.json('/music/api/state');
+    assert.equal(current.body.current.id, 222, 'the playing track is the one about to be removed');
+
+    const removed = await app.post('/music/api/queue', { action: 'remove', index: 1 });
+    assert.deepEqual(removed.body.queue.map((track) => track.id), [111, 333]);
+    // Removing the row must not leave playback pointing at nothing.
+    assert.equal(removed.body.current.id, 333, 'playback advances to the next track');
+    assert.equal(removed.body.playing, true);
+    // This one was playing, so the answer is waited on and must already hold it.
+    assert.deepEqual(app.readSession().feedback.dislikes, [222]);
+  } finally {
+    await app.close();
+  }
+});
+
+test('removing an unrated track stays a queue action when the dislike is refused', async () => {
+  // A refusal must not turn a successful removal into a failed request: the
+  // click asked for the row to go, and the row is gone.
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    // 186016 is delisted on NetEase, so the account refuses to like it — and a
+    // dislike of an unliked track is local, so this stays 200 either way.
+    const removed = await app.post('/music/api/queue', { action: 'remove', index: 2 });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.queue.length, 2);
+  } finally {
+    await app.close();
+  }
+});
+
+test('removing an unrated track marks it, and repeating the removal changes nothing', async () => {
+  // `remove` is often queue housekeeping, so a track that already carries a
+  // level is left as it is rather than having it rewritten.
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    await app.post('/music/api/taste', { trackId: 222, level: 'disliked' });
+
+    // 222 arrives already disliked; 333 arrives with the field present and set
+    // to the unrated value, which must still count as unrated.
+    await app.post('/music/api/taste', { trackId: 333, level: 'none' });
+    await app.post('/music/api/queue', { action: 'remove', index: 1 });
+    await app.post('/music/api/queue', { action: 'remove', index: 1 });
+
+    assert.deepEqual(app.readSession().feedback.dislikes, [333, 222], 'each unrated track is marked once');
+
+    // And a level that is already a dislike is not restated: the list is a set.
+    const before = app.readSession().feedback.dislikes.length;
+    await app.post('/music/api/queue', { action: 'clear' });
+    assert.equal(app.readSession().feedback.dislikes.length, before, 'clearing the queue judges nothing');
+  } finally {
+    await app.close();
+  }
+});
+
+test('removing a liked track does not rewrite the like into a dislike', async () => {
+  // The case the guard exists for — and the only one where it changes an
+  // outcome — needs a track the account has liked, so it is driven through the
+  // router against a stub like state rather than a live session.
+  const { MusicRouter } = await import('../lib/router.js');
+  const { Player } = await import('../lib/state.js');
+
+  const player = new Player();
+  /** Levels the removal recorded, so a re-rate is visible rather than silent. */
+  const applied = [];
+  let muted = false;
+  const store = { taste: () => 'liked', setTaste: (id, level) => applied.push([id, level]) };
+  const router = new MusicRouter({
+    base: '/music',
+    api: { authenticated: true, account: null },
+    player,
+    store,
+    qr: {},
+    dj: {},
+    likes: {
+      isLiked: () => true,
+      known: () => true,
+      ensure: async () => {},
+      set: () => {
+        if (!muted) throw new Error('a liked track must not be un-liked by a removal');
+        return { ok: true, id: 9, liked: false };
+      },
+      status: () => ({}),
+    },
+    panelHtml: '',
+    qrcodeJs: '',
+  });
+
+  assert.equal(await router.removeFromQueue({ id: 7, name: 'T7' }, false), null);
+  assert.deepEqual(applied, [], 'a removal must not reach setTaste for a rated track');
+  assert.equal(await router.removeFromQueue(null, false), null, 'nothing removed, nothing judged');
+
+  // An unrated track does get judged, and the store keeps the level.
+  muted = true;
+  router.store = { taste: () => 'none', setTaste: (id, level) => applied.push([id, level]) };
+  assert.deepEqual(await router.removeFromQueue({ id: 9, name: 'T9' }, false), { ok: true, id: 9, level: 'disliked' });
+  assert.deepEqual(applied, [[9, 'disliked']]);
+});
+
+test('a jump is not a judgement about the track', async () => {
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    const jumped = await app.post('/music/api/queue', { action: 'jump', index: 2 });
+    assert.equal(jumped.body.current.id, 333);
+    assert.deepEqual(jumped.body.queue.map((track) => track.disliked), [false, false, false]);
+    assert.deepEqual(app.readSession().feedback.dislikes, [], 'playing a track is not disliking it');
+  } finally {
+    await app.close();
+  }
+});
+
+test('a removed track can be given back its level', async () => {
+  // The two ends of the same level: removing dislikes, and the ✕ switcher
+  // clears it — after which the DJ may offer the track again.
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    await app.post('/music/api/queue', { action: 'remove', index: 1 });
+    assert.deepEqual(app.readSession().feedback.dislikes, [222]);
+
+    const restored = await app.post('/music/api/taste', { trackId: 222, level: 'none' });
+    assert.equal(restored.status, 200);
+    assert.deepEqual(app.readSession().feedback.dislikes, []);
+  } finally {
+    await app.close();
+  }
+});
+
+test('every queued track carries its taste, and a dislike is durable', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-taste-'));
+  try {
+    const app = await mount({ dataDir });
+    const played = await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    assert.deepEqual(
+      played.body.queue.map((track) => [track.liked, track.disliked]),
+      [[false, false], [false, false], [false, false]],
+      'nothing is rated yet',
+    );
+
+    const disliked = await app.post('/music/api/taste', { trackId: 222, level: 'disliked' });
+    assert.equal(disliked.status, 200);
+    assert.equal(disliked.body.queue[1].disliked, true, 'the list can see it');
+    assert.equal(disliked.body.queue[1].liked, false);
+    assert.equal(disliked.body.current.disliked, false, 'and only that track changed');
+
+    // The level is a stored preference, not a display flag: a restart keeps it.
+    await app.close();
+    const second = await mount({ dataDir });
+    try {
+      const again = await second.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+      assert.equal(again.body.queue[1].disliked, true, 'the DJ reads the same list, so it must survive');
+      assert.deepEqual(second.readSession().feedback.dislikes, [222]);
+
+      // Clearing the dislike is how a track becomes recommendable again.
+      const cleared = await second.post('/music/api/taste', { trackId: 222, level: 'none' });
+      assert.equal(cleared.body.queue[1].disliked, false);
+      assert.deepEqual(second.readSession().feedback.dislikes, [], 'and the file agrees at once');
+    } finally {
+      await second.close();
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('liking is a NetEase write and needs a signed-in session', async () => {
+  // The test harness has no session cookie, which is exactly the state that
+  // must not be papered over: a like the account never received would be
+  // contradicted by the next poll's heart, and would lie to the DJ meanwhile.
+  const app = await mount();
+  try {
+    const played = await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    assert.equal(played.body.authenticated, false);
+
+    const refused = await app.post('/music/api/taste', { trackId: 111, level: 'liked' });
+    assert.equal(refused.status, 401);
+    assert.equal(refused.body.code, 'ANONYMOUS', 'the page localizes around this code');
+    assert.ok(refused.body.error, 'and there is a reason for anything that does not');
+
+    // Nothing was recorded locally, so the next poll has no heart to take back —
+    // while the local level, which needs no session, still lands.
+    const disliked = await app.post('/music/api/taste', { trackId: 111, level: 'disliked' });
+    assert.equal(disliked.status, 200);
+    assert.deepEqual(app.readSession().feedback.likes, []);
+
+    // The older toggle spelling of a like reaches the same wall.
+    const legacy = await app.post('/music/api/feedback', { kind: 'likes', trackId: 111 });
+    assert.equal(legacy.status, 401);
+    assert.equal(legacy.body.code, 'ANONYMOUS');
+  } finally {
+    await app.close();
+  }
+});
+
+test('a taste level replaces the previous one', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-taste-'));
+  try {
+    const app = await mount({ dataDir });
+    try {
+      await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+
+      const disliked = await app.post('/music/api/feedback', { kind: 'dislikes', trackId: 333 });
+      assert.equal(disliked.body.queue[2].disliked, true, 'the older feedback door still works');
+      assert.deepEqual(app.readSession().feedback.dislikes, [333], 'a taste level is written through, not debounced');
+
+      // Clicking the same control again clears the level rather than restating it.
+      const cleared = await app.post('/music/api/feedback', { kind: 'dislikes', trackId: 333 });
+      assert.equal(cleared.body.queue[2].disliked, false);
+      assert.deepEqual(app.readSession().feedback.dislikes, []);
+
+      // A skip is counted rather than rated, and it changes no heart.
+      const skipped = await app.post('/music/api/feedback', { kind: 'skips', trackId: 333 });
+      assert.equal(skipped.status, 200);
+      assert.equal(skipped.body.queue[2].disliked, false);
+    } finally {
+      await app.close();
+    }
+
+    // Skips are debounced — they are frequent — so the unload flush is what
+    // lands them, which is the path a real shutdown takes.
+    const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'session.json'), 'utf8'));
+    assert.deepEqual(saved.feedback.skips, [333]);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('an unknown taste level or feedback kind is refused', async () => {
+  const app = await mount();
+  try {
+    const level = await app.post('/music/api/taste', { trackId: 1, level: 'sideways' });
+    assert.equal(level.status, 400);
+    assert.match(level.body.error, /liked, none, disliked/, 'the refusal names the levels');
+
+    const track = await app.post('/music/api/taste', { trackId: 'not-a-track', level: 'liked' });
+    assert.equal(track.status, 400);
+    assert.equal(track.body.code, 'BAD_ID');
+
+    const kind = await app.post('/music/api/feedback', { kind: 'shrug', trackId: 1 });
+    assert.equal(kind.status, 400);
   } finally {
     await app.close();
   }

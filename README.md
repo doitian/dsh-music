@@ -2,7 +2,7 @@
 
 NetEase Cloud Music ([music.163.com](https://music.163.com)) playback and an AI DJ, inside DeepSeek Harness.
 
-A **Music** entry appears in the DSH sidebar. It opens a player — your queue, synced lyrics, an `<audio>` element that streams through the host, QR sign-in, and a continuous AI DJ. The same player is also exposed to the agent through seven tools, so it can search, queue, and curate from a conversation.
+A **Music** entry appears in the DSH sidebar. It opens a player — your queue, synced lyrics, an `<audio>` element that streams through the host, QR sign-in, NetEase likes, and a continuous AI DJ. The same player is also exposed to the agent through seven tools, so it can search, queue, and curate from a conversation.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -143,6 +143,56 @@ Two implementation details worth knowing:
 
 `/music/health` reports both: `audio.preferred` and `audio.last` (what the last
 stream actually served, including `downgraded`).
+
+## Likes and taste
+
+A track holds one of three taste levels — **liked**, **unrated**, or
+**disliked** — and the player draws whichever it is:
+
+| Control | Level it sets |
+|---|---|
+| the **♡ / ♥** in a queue row, or the heart in the transport row | **liked** — the track goes into the account's 我喜欢的音乐 playlist on NetEase. Clicking the filled heart takes the like back. |
+| the **✕** in the transport row | **disliked** — local, and fed to the DJ, which stops picking the track. Clicking the filled ✕ clears it. |
+| the **✕** on a queue row | **disliked** as well. Taking a track out of the queue is a judgement about the track, not just about the list — without recording it the DJ re-derives the same track from the same similarity and charts within a batch or two. |
+| neither | unrated. |
+
+A like is a **NetEase** like, not a plugin flag, and the two halves of what that
+needs are both plain endpoints:
+
+- `POST /api/song/like` — one of the few *write* endpoints the web API still
+  serves unencrypted, so no `weapi` client is needed. It takes the direction
+  rather than toggling: the page always says which level it wants, so a stale
+  poll cannot turn a click into the wrong one, and disliking a liked track is one
+  request instead of two racing ones.
+- `GET /api/song/like/check` — which of a batch of ids are liked. The answer is
+  cached per track (5 minutes), so a whole queue's hearts cost one request, and
+  only tracks with no fresh answer ever cost another.
+
+Four properties are worth knowing, because they are what makes a heart mean
+something:
+
+- **An unknown track is not an unliked one.** A track nobody has asked about has
+  no answer, and renders as unrated until NetEase gives one.
+- **A refusal is not an answer.** An anonymous session answers `code 301` for
+  every id, and a delisted track answers `400` with NetEase's own reason
+  (`下架歌曲无法收藏` for 晴天, for instance). Both leave the heart empty and say
+  why in the toast; a refused check is retried later instead of being cached as
+  "not liked", so signing in mid-session fills the hearts without a restart.
+- **The account is the record.** `feedback.likes` in `session.json` is a *copy*
+  of the account's likes, kept for the DJ's taste digest. It is reconciled with
+  the account at startup — one read of the liked playlist — so a like made on
+  the phone counts, and a like an earlier build recorded locally (because it had
+  nowhere to send it) does not linger as a phantom.
+- **A dislike is local.** The plain web API has no dislike endpoint, so this is
+  where the plugin's own taste memory is the only record. Liking and disliking
+  are the same three levels rather than two flags: one replaces the other, and
+  disliking a liked track removes it on NetEase as well.
+- **Removing a queued track is a dislike, once.** The row's ✕ goes through the
+  same endpoint as the ✕ button, so the removal *is* the judgement — but a track
+  that already carries a level keeps it, because removing is often just queue
+  housekeeping (clearing out what has already been heard) and rewriting a like
+  into a dislike would be worse than missing the signal. Removing the track that
+  is playing also advances playback, which a removal otherwise would not.
 
 ## The AI DJ
 
@@ -366,6 +416,7 @@ browser (DSH web GUI, http://127.0.0.1:<port>)
                           ├─ lib/session.js   cookie store + QR login state machine
                           ├─ lib/state.js     queue, cursor, transport revisions
                           ├─ lib/dj.js        candidate pool + model/heuristic tiers
+                          ├─ lib/likes.js     the account's like state, cached
                           └─ lib/router.js    JSON API, HTML, Range-capable audio proxy
 ```
 
@@ -398,8 +449,10 @@ Four design notes:
 
 - The `/music` route prefix is registered on the bare HTTP server, which owns no
   authentication of its own. Anyone who can reach the port can browse the
-  library and stream audio; the route is loopback-only in the shipped
-  composition. It exposes no credentials — only search results, the queue, and
+  library, stream audio, and **change the account's likes** — `POST
+  /music/api/taste` is the panel's own control, so it is a real write to the
+  NetEase account. The route is loopback-only in the shipped composition. It
+  exposes no credentials — only search results, the queue, the like state, and
   audio bytes.
 - The NetEase cookie lives in `$DSH_HOME/music/session.json` in plain text, the
   same posture as the rest of the profile's session data. `music_login` with
@@ -424,6 +477,7 @@ when something looks wrong:
             "music_dj", "music_now_playing", "music_login"],
   "dj": { "enabled": false, "model": null, "lastRoute": null,
           "modelError": null, "lastPlanAt": null, "error": null },
+  "likes": { "cached": 12, "pending": 0, "error": null },
   "dataDir": "C:\\Users\\…\\.dsh\\music",
   "session": { "authenticated": true, "nickname": "…", "vip": true },
   "uptimeMs": 123456
@@ -433,7 +487,10 @@ when something looks wrong:
 `tools` is the point: the HTTP route is registered before the tools, so a tool
 that failed to register would otherwise leave a route that answers normally.
 Seeing all seven names is what proves startup completed. `panelContract` is the
-page/engine boundary the browser half checks before it starts playback.
+page/engine boundary the browser half checks before it starts playback. `likes`
+is the cache behind the hearts: `cached` is how many answers it holds, and
+`error` names why a check produced none — an anonymous session never asks, so
+both stay empty.
 
 ### If the browser blocks autoplay
 
@@ -469,8 +526,8 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 76 deterministic tests: pure, DJ, browser half
-npm run test:live    # 23 integration tests against the live NetEase API
+npm test             # 114 deterministic tests: pure, like state, DJ, browser half
+npm run test:live    # 33 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -486,10 +543,11 @@ network cases inside it.
 Or run one file directly:
 
 ```powershell
-node test/netease.test.mjs   # 18 pure: normalisation, quality ladder, cookies, player state
+node test/netease.test.mjs   # 32 pure: normalisation, quality ladder, likes, cookies, taste, player state
+node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 37 AI DJ: model call identity, route resolution, failure reporting, queue invariants
-node test/client.test.mjs    # 21 browser half: the engine against a fake DOM, and the page it pairs with
-node test/host.test.mjs      # 23 integration: routes, streaming, curation, quality
+node test/client.test.mjs    # 33 browser half: the engine against a fake DOM, and the page it pairs with
+node test/host.test.mjs      # 33 integration: routes, streaming, curation, quality, taste
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented
@@ -522,7 +580,7 @@ poll, and a track change replaces the pane. Two more cover the pane's shape: it
 is capped to a few lines, collapses to its header on demand, and remembers that
 choice across loads — while still fetching the lines, so expanding is instant.
 
-`npm test` runs the three deterministic files in sequence (`npm run test:all`
+`npm test` runs the four deterministic files in sequence (`npm run test:all`
 adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which
 is blocked in sandboxed environments.
 
@@ -581,9 +639,10 @@ workflow, tag, and commit — `npm view @doitian/dsh-music@<version> dist.attest
   a signed-in VIP account — 周杰伦's 晴天 (`id 186016`) is the canonical example,
   because it belongs to a digital album. The plugin surfaces NetEase's own
   refusal (`403` plus a reason) rather than retrying.
-- **No `weapi`/`eapi` encryption**, so like/scrobble/playlist-write endpoints
-  (which require it) are not implemented. Liking a track is recorded locally and
-  fed to the DJ instead.
+- **No `weapi`/`eapi` encryption**, so scrobbling and playlist writes are not
+  implemented. Liking a track needs none of it — see
+  [Likes and taste](#likes-and-taste) — but a *dislike* stays local, because
+  there is no plain endpoint for one.
 - **`apiPrefix` must stay `music`** unless `BASE` in `lib/client.js` is changed
   to match.
 - **The DJ's model tier is covered against stub contracts, not a live

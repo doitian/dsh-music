@@ -142,6 +142,9 @@ async function loadClientBundle({
     documentElement: makeElement('html', playState),
     createElement: (tag) => makeElement(tag, playState),
   };
+  /** The element `document.activeElement` currently reports. */
+  const active = { node: null };
+  Object.defineProperty(document, 'activeElement', { get: () => active.node });
 
   const savedWindow = globalThis.window;
   const savedDocument = globalThis.document;
@@ -682,6 +685,18 @@ function makePageElement(id) {
 }
 
 /**
+ * Mirror one taste level onto the fake state, the way the host's snapshot does:
+ * the two levels are exclusive, and a track the list does not hold is untouched.
+ */
+function applyTaste(state, trackId, level) {
+  for (const track of [state.current, ...(state.queue ?? [])]) {
+    if (!track || track.id !== trackId) continue;
+    track.liked = level === 'liked';
+    track.disliked = level === 'disliked';
+  }
+}
+
+/**
  * Boot `lib/panel.html` itself against a fake DOM.
  *
  * The page is inline script, so it runs through `new Function` with just the
@@ -689,13 +704,15 @@ function makePageElement(id) {
  * the shell document owns the audio element, which is the normal case and the
  * one where the page must still fetch everything it renders by itself. The fake
  * shell document declares `lang="en"` unless `options.lang` says otherwise, and
- * `options.storage` seeds the page's local storage.
+ * `options.storage` seeds the page's local storage. `options.handle` may answer
+ * one path itself — a refusal the page has to localize, for instance.
  */
 async function bootPanel(options = {}) {
   const state = options.state ?? stateDocument();
   const lyricsById = options.lyricsById ?? {};
   const stored = new Map(Object.entries(options.storage ?? {}));
   const requests = [];
+  const calls = [];
   const elements = new Map();
   const intervals = [];
 
@@ -725,12 +742,20 @@ async function bootPanel(options = {}) {
     setItem: (key, value) => { stored.set(key, String(value)); },
     removeItem: (key) => { stored.delete(key); },
   };
-  const fetch = async (url) => {
+  const fetch = async (url, init) => {
     const path = String(url).replace(/^.*\/api/, '');
     requests.push(path);
+    calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
+    const custom = options.handle ? await options.handle(path) : null;
+    if (custom) return custom;
     let body = {};
-    if (path === '/state') body = state;
-    else if (path === '/dj/models') body = { routes: [], selected: {}, configured: {}, source: 'auto' };
+    // Every mutating route answers with the fresh snapshot, as the host does.
+    if (path === '/state' || path === '/control' || path === '/queue' || path === '/report') body = state;
+    else if (path === '/taste') {
+      const { trackId, level } = calls.at(-1).body;
+      applyTaste(state, trackId, level);
+      body = state;
+    } else if (path === '/dj/models') body = { routes: [], selected: {}, configured: {}, source: 'auto' };
     else if (path === '/quality') body = { levels: [] };
     else if (path.startsWith('/lyric/')) {
       const id = Number(path.slice('/lyric/'.length));
@@ -764,6 +789,7 @@ async function bootPanel(options = {}) {
   return {
     state,
     requests,
+    calls,
     lyricRequests,
     storage: stored,
     element: (id) => document.getElementById(id),
@@ -830,4 +856,171 @@ test('a remembered collapse is applied when the page loads', async () => {
   // The lines are still fetched while hidden, so expanding is instant.
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123']);
   assert.match(panel.element('lyrics').innerHTML, /first line/);
+});
+
+// ----------------------------------------------------------------- the hearts
+/** A state document with a queue, so the list has rows to draw hearts into. */
+function queueState({ liked = [], disliked = [], currentId = 1 } = {}) {
+  const track = (id) => ({
+    id,
+    name: `T${id}`,
+    artists: ['A'],
+    album: 'X',
+    duration: 1000,
+    picUrl: null,
+    vip: false,
+    liked: liked.includes(id),
+    disliked: disliked.includes(id),
+  });
+  const queue = [track(1), track(2)];
+  return stateDocument({ queue, current: queue.find((entry) => entry.id === currentId), counts: { queued: 2, remaining: 1 } });
+}
+
+/** A click event whose target sits inside one row control (`like`, `jump`, …). */
+const rowClick = (control, value) => ({
+  target: {
+    closest: (asked) => (asked === `[data-${control}]` ? { dataset: { [control]: String(value) } } : null),
+  },
+});
+
+test('the song list draws a filled heart only for a liked track', async () => {
+  const panel = await bootPanel({ state: queueState({ liked: [2] }) });
+  const html = panel.element('queue').innerHTML;
+
+  const rows = html.split('<div class="row').slice(1);
+  assert.equal(rows.length, 2, 'one row per queued track');
+  assert.doesNotMatch(rows[0], /class="heart on"/, 'an unrated track has no filled heart');
+  assert.match(rows[0], /data-like="0"[^>]*>♡</, 'and offers the hollow one');
+  assert.match(rows[1], /class="heart on" data-like="1" title="Unlike">♥</, 'a liked track keeps its filled heart');
+});
+
+test('the row heart is a switcher, and it does not play the row', async () => {
+  const panel = await bootPanel({ state: queueState({ liked: [1] }) });
+
+  // A liked track: the same button takes the like back.
+  await panel.element('queue').onclick(rowClick('like', 0));
+  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'none' } });
+  assert.equal(panel.state.queue[0].liked, false, 'and the heart empties');
+
+  await panel.element('queue').onclick(rowClick('like', 0));
+  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'liked' } });
+  assert.equal(panel.state.queue[0].liked, true);
+
+  // A click on the row itself still plays it, so the heart's branch is what
+  // keeps the two apart.
+  await panel.element('queue').onclick(rowClick('jump', 1));
+  assert.deepEqual(panel.calls.at(-1), { path: '/queue', body: { action: 'jump', index: 1 } });
+  assert.equal(panel.calls.filter((call) => call.path === '/taste').length, 2, 'a row click must not like anything');
+});
+
+test('the transport row is a switcher too', async () => {
+  const panel = await bootPanel({ state: queueState({ liked: [1] }) });
+  assert.equal(panel.element('like').textContent, '♥');
+  assert.equal(panel.element('like').classList.contains('on'), true);
+  assert.equal(panel.element('like').title, 'Unlike');
+
+  await panel.element('like').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'none' } });
+  assert.equal(panel.element('like').textContent, '♡', 'the button follows the level it just set');
+  assert.equal(panel.element('like').title, 'Like');
+
+  await panel.element('like').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'liked' } });
+  assert.equal(panel.element('like').textContent, '♥');
+});
+
+test('a dislike is the third level, and it skips the track', async () => {
+  const panel = await bootPanel({ state: queueState({ currentId: 1 }) });
+  await panel.element('dislike').onclick();
+  assert.deepEqual(panel.calls.at(-2), { path: '/taste', body: { trackId: 1, level: 'disliked' } });
+  assert.deepEqual(panel.calls.at(-1), { path: '/control', body: { action: 'next' } }, 'a disliked track is skipped');
+  assert.equal(panel.state.current.disliked, true);
+
+  // Clicking the filled ✕ takes the level back and stays on the track.
+  await panel.element('dislike').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'none' } });
+  assert.equal(panel.state.current.disliked, false);
+});
+
+test('removing a row records a dislike through the same endpoint', async () => {
+  // The row's ✕ is a judgement about the track, not just about the list: the
+  // host marks it disliked so the DJ does not offer it again. That is why this
+  // is the taste endpoint and not `/queue`, and why it confirms like the ✕.
+  const panel = await bootPanel({ state: queueState() });
+
+  await panel.element('queue').onclick(rowClick('remove', 1));
+  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 2, level: 'disliked' } });
+  assert.equal(panel.element('toast').textContent, 'Disliked');
+  assert.equal(panel.state.queue[1].disliked, true, 'and the row is gone with the level set');
+  assert.equal(panel.calls.some((call) => call.path === '/queue'), false, 'the removal is one request, not two');
+
+  // Unlike a dislike from the transport row, this does not skip: nothing was
+  // playing that the click asked to move past.
+  assert.equal(panel.calls.some((call) => call.path === '/control'), false);
+});
+
+test('a row removal cannot be fired twice while it is in flight', async () => {
+  // The request is a trip to NetEase, so a second click before it lands would
+  // toggle the level straight back.
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const panel = await bootPanel({
+    state: queueState(),
+    handle: async (path) => {
+      if (path !== '/taste') return null;
+      await gate;
+      return { ok: true, status: 200, text: async () => JSON.stringify(panel.state) };
+    },
+  });
+
+  const button = { disabled: false, dataset: { remove: '1' } };
+  const click = { target: { closest: (asked) => (asked === '[data-remove]' ? button : null) } };
+  const inFlight = panel.element('queue').onclick(click);
+  // The handler reaches the request on the first microtask, and the button is
+  // disabled on the way in.
+  await null;
+  assert.equal(button.disabled, true, 'the row is locked while the host answers');
+  assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 2, level: 'disliked' } });
+  release();
+  await inFlight;
+  assert.equal(button.disabled, false, 'and released afterwards, so the list stays usable');
+});
+
+test('the taste labels follow the shell language', async () => {
+  // These two buttons carry no `data-i18n`: their label says which direction a
+  // click moves the track, so the page paints them — including before the first
+  // state document, which is when a zh shell would otherwise flash English.
+  const panel = await bootPanel({ state: queueState({ liked: [1] }), lang: 'zh' });
+  assert.equal(panel.element('like').title, '取消喜欢');
+  assert.equal(panel.element('dislike').title, '不喜欢');
+  assert.match(panel.element('queue').innerHTML, /title="取消喜欢"/, 'and the rows follow it too');
+});
+
+test('a refused like says so in the page’s own language, and changes nothing', async () => {
+  // The host answers 401 with a machine code for an anonymous session; the
+  // sentence it also carries is English, so the page must not show it raw.
+  const panel = await bootPanel({
+    state: queueState(),
+    handle: (path) =>
+      path === '/taste'
+        ? { ok: false, status: 401, text: async () => JSON.stringify({ error: 'the NetEase session is anonymous', code: 'ANONYMOUS' }) }
+        : null,
+  });
+
+  await panel.element('like').onclick();
+  assert.equal(panel.element('toast').textContent, 'Sign in to NetEase to like tracks');
+  assert.equal(panel.state.current.liked, false, 'no heart for a like NetEase never received');
+  assert.equal(panel.element('like').textContent, '♡');
+});
+
+test('a refusal the page does not know is reported in the host’s words', async () => {
+  const panel = await bootPanel({
+    state: queueState(),
+    handle: (path) =>
+      path === '/taste'
+        ? { ok: false, status: 502, text: async () => JSON.stringify({ error: '歌曲已经下架了', code: 400 }) }
+        : null,
+  });
+  await panel.element('like').onclick();
+  assert.equal(panel.element('toast').textContent, '歌曲已经下架了');
 });
