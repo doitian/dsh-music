@@ -18,20 +18,31 @@ A **Music** entry appears in the DSH sidebar. It opens a full player — search,
 ## Install
 
 The package is self-contained — **no dependencies, no build step, no peer
-packages** — so it installs from a local path.
+packages** — so it installs either from npm or straight from a checkout.
+
+### From npm
+
+The package is published as **`@doitian/dsh-music`**. In the Desktop app, install
+it from the GUI, because the `dsh plugin` CLI refuses this profile
+(`profile "desktop" is managed exclusively by the Electron application`):
+
+**Plugins** page → **Add plugin** → `@doitian/dsh-music`
+
+For any other profile, from a shell:
 
 ```powershell
-# from the profile directory
-cd $HOME\.dsh\profiles\desktop
-pnpm add file:C:\path\to\dsh-music
+dsh plugin --profile <name> add @doitian/dsh-music
 ```
 
-Then add the bundle to the profile's selection in `package.json`:
+### From a checkout
+
+Point the profile at a working tree instead — this is what developing the plugin
+looks like. Add it to the profile's `package.json` directly:
 
 ```json
 {
   "dependencies": {
-    "@doitian/dsh-music": "file:C:/path/to/dsh-music"
+    "@doitian/dsh-music": "link:C:/path/to/dsh-music"
   },
   "dsh": {
     "profile": {
@@ -45,12 +56,16 @@ Then add the bundle to the profile's selection in `package.json`:
 }
 ```
 
+A `link:` dependency keeps the profile pointing at the working tree, so edits
+need no reinstall. Note that this is what makes a plugin *remount* re-read the
+served page while the module stays cached — see
+[Reloading a change](#reloading-a-change).
+
+### Either way
+
 The bundle's own `cordis.patch.yml` inserts the plugin entry, so no
 `cordis.patch.yml` edit is required. Restart the app (or reload the profile) and
 **Music** appears in the sidebar.
-
-In the DSH Web GUI this is the **Plugins** page → **Add plugin** → paste the
-absolute path — the same thing without a shell.
 
 ## Sign in (optional)
 
