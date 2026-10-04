@@ -382,22 +382,25 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 60 deterministic tests: pure, DJ, browser half
+npm test             # 65 deterministic tests: pure, DJ, browser half
 npm run test:live    # 23 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
-The split matters for CI: `npm test` never touches the network, so it is what
-gates a release, while `npm run test:live` drives the real API and is reported
-separately — upstream availability must not block a publish. A red live run
-means NetEase changed something, not that the code is broken.
-`MUSIC_OFFLINE=1` skips the network cases inside the live file.
+The split matters for CI. `npm test` never touches the network, so it is what
+runs on every push and gates a release. `npm run test:live` drives the real API,
+and **GitHub's runners cannot reach it** — from a US runner
+`/api/search/get/web` answers in ~350 ms with an empty result set, so its first
+assertion fails on a network condition rather than a regression. It therefore
+lives in `.github/workflows/live.yml` on manual dispatch only, and the
+authoritative run is local, before a release. `MUSIC_OFFLINE=1` skips the
+network cases inside it.
 
 Or run one file directly:
 
 ```powershell
 node test/netease.test.mjs   # 16 pure: normalisation, quality ladder, cookies, player state
-node test/dj.test.mjs        # 26 AI DJ: model tier, picker listing, queue invariants
+node test/dj.test.mjs        # 31 AI DJ: model tier, failure reporting, picker listing, queue invariants
 node test/client.test.mjs    # 18 browser half, executed against a fake DOM
 node test/host.test.mjs      # 23 integration: routes, streaming, curation, quality
 ```
@@ -421,8 +424,8 @@ component ever rendered**, so playback cannot depend on the Music page being
 mounted. They also cover the seek handshake, failure reporting, disposal, and
 the contract handshake.
 
-`npm test` runs all four files in sequence, deliberately **not**
-`node --test <dir>`: the directory form forks one child process per file, which
+`npm test` runs the three deterministic files in sequence (`npm run test:all`
+adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which
 is blocked in sandboxed environments.
 
 ### Reloading a change
