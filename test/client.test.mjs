@@ -1024,3 +1024,74 @@ test('a refusal the page does not know is reported in the host’s words', async
   await panel.element('like').onclick();
   assert.equal(panel.element('toast').textContent, '歌曲已经下架了');
 });
+
+// ------------------------------------------------------------- the model card
+test('the DJ model card stays folded until asked, and the choice sticks', async () => {
+  const panel = await bootPanel();
+  const body = panel.element('dj-model-body');
+  const toggle = panel.element('dj-model-toggle');
+
+  assert.equal(body.classList.contains('collapsed'), true, 'folded by default');
+  assert.equal(toggle.textContent, '▸');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+
+  // The header is the click target; the chevron inside it is what a keyboard
+  // reaches, and its click bubbles to the same handler.
+  panel.element('dj-model-head').onclick();
+  assert.equal(body.classList.contains('collapsed'), false, 'the click unfolds the form');
+  assert.equal(toggle.textContent, '▾', 'and the chevron points the way back');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(panel.storage.get('dsh-music.djmodel.expanded'), '1', 'the choice is remembered');
+
+  panel.element('dj-model-head').onclick();
+  assert.equal(body.classList.contains('collapsed'), true);
+  assert.equal(toggle.textContent, '▸');
+  assert.equal(panel.storage.get('dsh-music.djmodel.expanded'), '0');
+});
+
+test('the folded card names the effective route, and a remembered fold is applied', async () => {
+  // The fold is only honest if the one visible line answers "which model is the
+  // DJ using?" — otherwise a closed picker hides its own answer.
+  const panel = await bootPanel({
+    storage: { 'dsh-music.djmodel.expanded': '1' },
+    handle: (path) =>
+      path === '/dj/models'
+        ? {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                routes: [],
+                selected: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' },
+                configured: {},
+                source: 'panel',
+              }),
+          }
+        : null,
+  });
+
+  assert.equal(panel.element('dj-model-body').classList.contains('collapsed'), false, 'the remembered fold opens it');
+  assert.equal(panel.element('dj-model-toggle').textContent, '▾');
+  assert.equal(panel.element('dj-model-route').textContent, 'opencode-go/deepseek-v4.1-flash');
+  assert.equal(panel.element('dj-model-source').textContent, ' · panel', 'and where the pin came from');
+});
+
+test('an error the folded card would hide is marked on its header', async () => {
+  // A broken route or a host that predates the endpoint writes to the status
+  // line, which is inside the folded body — so the header has to carry a mark.
+  const panel = await bootPanel({
+    handle: (path) =>
+      path === '/dj/models'
+        ? {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({ routes: [], selected: {}, configured: {}, source: 'auto', error: 'no model service is mounted' }),
+          }
+        : null,
+  });
+
+  assert.equal(panel.element('dj-model-status').textContent, 'no model service is mounted');
+  assert.equal(panel.element('dj-model-warn').textContent, ' ⚠');
+  assert.equal(panel.element('dj-model-warn').title, 'no model service is mounted');
+});

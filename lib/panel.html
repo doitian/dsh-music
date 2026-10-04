@@ -136,7 +136,21 @@
       .queue .scroll { padding-top: 0; }
       .dj-status { margin: 0 14px 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font-size: 12px; }
       .dj-status b { color: var(--accent); }
-      .model-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+      /* The DJ model picker is a set-once setting, so the card keeps only its
+         header row and the queue and the lyrics pane keep the space. The header
+         is the click target; the chevron inside it is the keyboard one. */
+      .model-head { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
+      .model-head .model-now {
+        flex: 1; min-width: 0; text-align: right; color: var(--muted);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .model-head .toggle {
+        background: none; border: 0; margin: 0; padding: 0 2px; font: inherit;
+        color: var(--muted); cursor: pointer;
+      }
+      .model-head .toggle:hover { color: var(--fg); }
+      .model-head .warn { color: var(--accent); }
+      .dj-model-body.collapsed { display: none; }
       .row-inline { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
       .row-inline select, .row-inline input { flex: 1 1 0; min-width: 0; font-size: 12px; padding: 4px 6px; }
       .row-inline button { font-size: 12px; padding: 4px 8px; }
@@ -214,23 +228,29 @@
           <div id="dj-status"></div>
 
           <div class="dj-status" id="dj-model">
-            <div class="model-head">
+            <!-- One always-visible line: the setting that matters at a glance is
+                 the effective route, and the form below it is folded away until
+                 asked for. -->
+            <div class="model-head" id="dj-model-head">
               <span data-i18n="djModel">DJ model</span>
-              <span id="dj-model-source" style="color: var(--muted)"></span>
+              <span class="model-now"><span id="dj-model-route"></span><span id="dj-model-source"></span><span class="warn" id="dj-model-warn"></span></span>
+              <button id="dj-model-toggle" class="toggle" type="button" aria-controls="dj-model-body" aria-expanded="false"></button>
             </div>
-            <div class="row-inline">
-              <select id="dj-provider" title="provider route"></select>
-              <select id="dj-model-select" title="model"></select>
+            <div class="dj-model-body collapsed" id="dj-model-body">
+              <div class="row-inline">
+                <select id="dj-provider" title="provider route"></select>
+                <select id="dj-model-select" title="model"></select>
+              </div>
+              <div class="row-inline">
+                <input id="dj-model-custom" data-i18n-ph="customModelPh" placeholder="Custom model id" style="display: none" />
+              </div>
+              <div class="row-inline">
+                <button id="dj-model-save" class="primary" data-i18n="save">Save</button>
+                <button id="dj-model-test" data-i18n="test">Test</button>
+                <button id="dj-model-clear" data-i18n="revert" data-i18n-title="revertTitle" title="Revert to the profile patch">Revert</button>
+              </div>
+              <div id="dj-model-status" style="color: var(--muted)"></div>
             </div>
-            <div class="row-inline">
-              <input id="dj-model-custom" data-i18n-ph="customModelPh" placeholder="Custom model id" style="display: none" />
-            </div>
-            <div class="row-inline">
-              <button id="dj-model-save" class="primary" data-i18n="save">Save</button>
-              <button id="dj-model-test" data-i18n="test">Test</button>
-              <button id="dj-model-clear" data-i18n="revert" data-i18n-title="revertTitle" title="Revert to the profile patch">Revert</button>
-            </div>
-            <div id="dj-model-status" style="color: var(--muted)"></div>
           </div>
         </section>
       </main>
@@ -294,6 +314,8 @@
           lyricsToggleShow: '展开歌词面板',
           queue: '播放队列',
           djModel: 'AI DJ 模型',
+          djModelToggleShow: '展开模型设置',
+          djModelToggleHide: '收起模型设置',
           customModelPh: '自定义 model id',
           save: '保存',
           test: '测试',
@@ -380,6 +402,8 @@
           lyricsToggleShow: 'Expand the lyrics pane',
           queue: 'Queue',
           djModel: 'DJ model',
+          djModelToggleShow: 'Show the model settings',
+          djModelToggleHide: 'Hide the model settings',
           customModelPh: 'Custom model id',
           save: 'Save',
           test: 'Test',
@@ -478,9 +502,10 @@
           document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
         } catch { /* headless */ }
         applyStaticStrings();
-        // The toggle's label and title depend on the collapse state, not on a
+        // The toggles' labels and titles depend on the collapse state, not on a
         // fixed key, so they are painted rather than carried as data-i18n.
         paintLyricsToggle();
+        paintDjModelToggle();
         // The gesture hint carries markup; drop it so render() rebuilds it in
         // the new language.
         $('gesture')?.remove();
@@ -489,7 +514,8 @@
         // document, so they are painted here as well — otherwise a zh shell
         // shows them in English until the first poll lands.
         paintTaste();
-        paintModelSource();
+        paintDjModelHeader();
+        paintDjModelToggle();
         paintQualityOptions();
         if (modelRoutes.length) renderModelOptions();
       }
@@ -514,6 +540,9 @@
       /** Local-storage key for whether the lyrics pane is collapsed. */
       const LYRICS_PREF = 'dsh-music.lyrics.collapsed';
       let lyricsCollapsed = readLyricsPref();
+      /** Local-storage key for whether the DJ model form is unfolded. */
+      const DJ_MODEL_PREF = 'dsh-music.djmodel.expanded';
+      let djModelExpanded = readDjModelPref();
       let volumePostAt = 0;
 
       const fmt = (ms) => {
@@ -1205,6 +1234,59 @@
         }
       }
 
+      /** Unfolded preference, remembered across reloads when storage is open. */
+      function readDjModelPref() {
+        try { return localStorage.getItem(DJ_MODEL_PREF) === '1'; } catch { return false; }
+      }
+
+      function saveDjModelPref(expanded) {
+        try { localStorage.setItem(DJ_MODEL_PREF, expanded ? '1' : '0'); } catch { /* storage denied */ }
+      }
+
+      /** Reflect `djModelExpanded` in the card and in its chevron. */
+      function paintDjModelToggle() {
+        $('dj-model-body').classList.toggle('collapsed', !djModelExpanded);
+        const button = $('dj-model-toggle');
+        button.textContent = djModelExpanded ? '▾' : '▸';
+        button.title = t(djModelExpanded ? 'djModelToggleHide' : 'djModelToggleShow');
+        button.setAttribute('aria-expanded', djModelExpanded ? 'true' : 'false');
+      }
+
+      /**
+       * The folded card's one line: the effective route and, after it, where
+       * that choice came from. The route leads because it is the answer to the
+       * question the folded card raises — "which model is the DJ using?".
+       */
+      function paintDjModelHeader() {
+        const { provider, model } = modelSelected ?? {};
+        $('dj-model-route').textContent = provider ? (model ? `${provider}/${model}` : provider) : '';
+        paintModelSource();
+      }
+
+      /**
+       * The form's status line, mirrored as a marker on the header.
+       *
+       * A route error or a host that predates this feature would otherwise be
+       * invisible while the form is folded, which is exactly when the picker
+       * looks like it is simply missing.
+       */
+      function paintModelStatus(text) {
+        const message = text ?? '';
+        $('dj-model-status').textContent = message;
+        const warn = $('dj-model-warn');
+        warn.textContent = message ? ' ⚠' : '';
+        warn.title = message;
+      }
+
+      // The header is the click target and the chevron sits inside it, so a
+      // click on the button bubbles here once rather than toggling twice.
+      $('dj-model-head').onclick = () => {
+        djModelExpanded = !djModelExpanded;
+        saveDjModelPref(djModelExpanded);
+        paintDjModelToggle();
+      };
+      paintDjModelToggle();
+
       function renderModelOptions() {
         const provider = $('dj-provider').value;
         const route = modelRoutes.find((entry) => entry.provider === provider);
@@ -1227,10 +1309,15 @@
         } else {
           custom.style.display = 'none';
         }
-        if (route?.error) $('dj-model-status').textContent = route.error;
+        if (route?.error) paintModelStatus(route.error);
       }
 
-      /** Where the effective model choice comes from, localized. */
+      /**
+       * Where the effective model choice comes from, localized.
+       *
+       * It trails the route on the folded card, so the separator belongs to it:
+       * with no route to trail, a leading "·" would dangle.
+       */
       function paintModelSource() {
         const key = {
           panel: 'srcPanel',
@@ -1238,7 +1325,9 @@
           'agent-default': 'srcAgentDefault',
           discovered: 'srcDiscovered',
         }[modelSourceRaw];
-        $('dj-model-source').textContent = key ? t(key) : modelSourceRaw || '';
+        const label = key ? t(key) : modelSourceRaw || '';
+        const route = $('dj-model-route').textContent;
+        $('dj-model-source').textContent = label && route ? ` · ${label}` : label;
       }
 
       async function loadModelPicker() {
@@ -1260,11 +1349,15 @@
             ? providers.map((provider) => `<option value="${esc(provider)}">${esc(provider)}</option>`).join('')
             : `<option value="">${esc(t('noProvider'))}</option>`;
           select.value = modelSelected.provider ?? modelConfigured.provider ?? providers[0] ?? '';
-          renderModelOptions();
 
+          // Painted before the options are rendered: that call is what reports a
+          // provider's own catalogue failure, and it must land last so the
+          // folded card's marker cannot be wiped by the (usually empty)
+          // host-level error.
           modelSourceRaw = data.source ?? '';
-          paintModelSource();
-          $('dj-model-status').textContent = data.error ?? '';
+          paintDjModelHeader();
+          paintModelStatus(data.error ?? '');
+          renderModelOptions();
         } catch (error) {
           // A 404 here means this page is newer than the host module: the page
           // is re-read from disk on every plugin mount, while Node keeps
@@ -1272,9 +1365,9 @@
           // say that instead of showing a bare "unknown endpoint".
           if (/unknown endpoint|\b404\b/.test(error.message)) {
             setModelControls(false);
-            $('dj-model-status').textContent = t('hostPredatesLong');
+            paintModelStatus(t('hostPredatesLong'));
           } else {
-            $('dj-model-status').textContent = error.message;
+            paintModelStatus(error.message);
           }
         }
       }
@@ -1313,18 +1406,17 @@
       $('dj-model-clear').onclick = () =>
         void saveModelRoute('', '', t('reverted'));
       $('dj-model-test').onclick = async () => {
-        $('dj-model-status').textContent = t('testing');
+        paintModelStatus(t('testing'));
         try {
           const result = await api('/dj/test', { method: 'POST', body: {} });
           if (result.source === 'model') {
-            $('dj-model-status').textContent =
-              `✓ ${result.route} — ${(result.picked ?? []).join(' · ')}${result.vibe ? ` (${result.vibe})` : ''}`;
+            paintModelStatus(
+              `✓ ${result.route} — ${(result.picked ?? []).join(' · ')}${result.vibe ? ` (${result.vibe})` : ''}`);
           } else {
-            $('dj-model-status').textContent =
-              `✗ ${result.modelError ?? result.note ?? t('modelTierUnavailable')} — ${t('heuristics')}`;
+            paintModelStatus(`✗ ${result.modelError ?? result.note ?? t('modelTierUnavailable')} — ${t('heuristics')}`);
           }
         } catch (error) {
-          $('dj-model-status').textContent = error.message;
+          paintModelStatus(error.message);
         }
       };
 
