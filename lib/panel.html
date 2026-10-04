@@ -115,7 +115,7 @@
       .queue .scroll { padding-top: 0; }
       .dj-status { margin: 0 14px 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font-size: 12px; }
       .dj-status b { color: var(--accent); }
-      .curator-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+      .model-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
       .row-inline { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
       .row-inline select, .row-inline input { flex: 1 1 0; min-width: 0; font-size: 12px; padding: 4px 6px; }
       .row-inline button { font-size: 12px; padding: 4px 8px; }
@@ -199,8 +199,8 @@
           <div id="dj-status"></div>
 
           <div class="dj-status" id="dj-model">
-            <div class="curator-head">
-              <span>AI DJ 模型 / curator model</span>
+            <div class="model-head">
+              <span>AI DJ 模型 / DJ model</span>
               <span id="dj-model-source" style="color: var(--muted)"></span>
             </div>
             <div class="row-inline">
@@ -798,9 +798,9 @@
       $('qr-close').onclick = () => { clearInterval(qrTimer); $('login').close(); };
       $('login').addEventListener('close', () => clearInterval(qrTimer));
 
-      // ---------------------------------------------------------- curator model
+      // ---------------------------------------------------------- DJ model
       /**
-       * The curator picker.
+       * The DJ model picker.
        *
        * Routes and their catalogued models come from the host's LLM service.
        * The catalogue is advisory — core resolution accepts unlisted ids — so
@@ -808,11 +808,11 @@
        * saved choice persists in the session document and takes precedence over
        * the profile patch, which "回退 Revert" falls back to.
        */
-      let curatorRoutes = [];
-      let curatorSelected = { provider: null, model: null };
-      let curatorConfigured = { provider: null, model: null };
+      let modelRoutes = [];
+      let modelSelected = { provider: null, model: null };
+      let modelConfigured = { provider: null, model: null };
       const CUSTOM = '__custom__';
-      const CURATOR_CONTROLS = [
+      const MODEL_CONTROLS = [
         'dj-provider',
         'dj-model-select',
         'dj-model-custom',
@@ -822,8 +822,8 @@
       ];
 
       /** Enable or disable every picker control at once. */
-      function setCuratorEnabled(enabled) {
-        for (const id of CURATOR_CONTROLS) {
+      function setModelControls(enabled) {
+        for (const id of MODEL_CONTROLS) {
           const node = $(id);
           if (node) node.disabled = !enabled;
         }
@@ -831,14 +831,14 @@
 
       function renderModelOptions() {
         const provider = $('dj-provider').value;
-        const route = curatorRoutes.find((entry) => entry.provider === provider);
+        const route = modelRoutes.find((entry) => entry.provider === provider);
         const models = route?.models ?? [];
         const select = $('dj-model-select');
         select.innerHTML =
           models.map((model) => `<option value="${esc(model.id)}">${esc(model.name || model.id)}</option>`).join('') +
           `<option value="${CUSTOM}">其他… / Other…</option>`;
 
-        const pinned = curatorSelected.provider === provider ? curatorSelected.model : null;
+        const pinned = modelSelected.provider === provider ? modelSelected.model : null;
         const custom = $('dj-model-custom');
         if (pinned && models.some((model) => model.id === pinned)) {
           select.value = pinned;
@@ -854,25 +854,25 @@
         if (route?.error) $('dj-model-status').textContent = route.error;
       }
 
-      async function loadCurator() {
+      async function loadModelPicker() {
         try {
           const data = await api('/dj/models');
-          setCuratorEnabled(true);
-          curatorRoutes = data.routes ?? [];
-          curatorSelected = data.selected ?? { provider: null, model: null };
-          curatorConfigured = data.configured ?? { provider: null, model: null };
+          setModelControls(true);
+          modelRoutes = data.routes ?? [];
+          modelSelected = data.selected ?? { provider: null, model: null };
+          modelConfigured = data.configured ?? { provider: null, model: null };
 
-          const providers = curatorRoutes.map((route) => route.provider);
+          const providers = modelRoutes.map((route) => route.provider);
           // Keep a value the catalogue does not list, so a working pin is not
           // silently replaced by whatever the adapter happens to offer.
-          for (const value of [curatorSelected.provider, curatorConfigured.provider]) {
+          for (const value of [modelSelected.provider, modelConfigured.provider]) {
             if (value && !providers.includes(value)) providers.push(value);
           }
           const select = $('dj-provider');
           select.innerHTML = providers.length
             ? providers.map((provider) => `<option value="${esc(provider)}">${esc(provider)}</option>`).join('')
             : '<option value="">(无 provider / none)</option>';
-          select.value = curatorSelected.provider ?? curatorConfigured.provider ?? providers[0] ?? '';
+          select.value = modelSelected.provider ?? modelConfigured.provider ?? providers[0] ?? '';
           renderModelOptions();
 
           $('dj-model-source').textContent =
@@ -884,7 +884,7 @@
           // serving the cached module. Only a process restart reunites them, so
           // say that instead of showing a bare "unknown endpoint".
           if (/unknown endpoint|\b404\b/.test(error.message)) {
-            setCuratorEnabled(false);
+            setModelControls(false);
             $('dj-model-status').textContent =
               '宿主模块早于本功能：请完全退出并重新启动 Harness（关闭窗口不够，它会留在托盘里）/ ' +
               'the host module predates this feature — fully quit and relaunch the harness ' +
@@ -902,11 +902,11 @@
           : $('dj-model-select').value;
       }
 
-      async function saveCurator(provider, model, message) {
+      async function saveModelRoute(provider, model, message) {
         try {
           state = await api('/dj', { method: 'POST', body: { provider, model } });
           render();
-          await loadCurator();
+          await loadModelPicker();
           toast(message);
         } catch (error) {
           toast(error.message);
@@ -924,10 +924,10 @@
           toast('请先选择 provider 与 model / pick a provider and a model');
           return;
         }
-        void saveCurator(provider, model, `已保存 / saved ${provider}/${model}`);
+        void saveModelRoute(provider, model, `已保存 / saved ${provider}/${model}`);
       };
       $('dj-model-clear').onclick = () =>
-        void saveCurator('', '', '已回退到 profile 配置 / reverted to the profile config');
+        void saveModelRoute('', '', '已回退到 profile 配置 / reverted to the profile config');
       $('dj-model-test').onclick = async () => {
         $('dj-model-status').textContent = '测试中… / testing…';
         try {
@@ -1093,7 +1093,7 @@
 
       refresh();
       setInterval(refresh, 1500);
-      void loadCurator();
+      void loadModelPicker();
       void loadQuality();
       // Progress and lyric highlighting interpolate locally between the
       // engine's reports, so they need their own repaint clock now that the

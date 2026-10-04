@@ -411,7 +411,7 @@ test('failure details are carried through when present', async () => {
   }
 });
 
-// ------------------------------------------------------- curator listing
+// ------------------------------------------------------- model listing
 
 test('listRoutes reports the routes and catalogues the picker shows', async () => {
   const llm = makeLlm({ reply: picks(0) });

@@ -119,7 +119,7 @@ rich request could not be honoured. It never silently pretends, and it never
 leaves you with silence because you asked for more than the track has.
 
 The choice is saved in `session.json` and beats `config.audioLevel` in the
-profile patch, the same precedence the curator model uses. An unknown value in
+profile patch, the same precedence the DJ's model route uses. An unknown value in
 either place falls back to `exhigh` rather than failing a stream.
 
 Two implementation details worth knowing:
@@ -166,7 +166,7 @@ last track ended resumes on its own because the desired state was already
 
 ### Choosing the model
 
-**In the player.** The right column carries a **AI DJ 模型 / curator model**
+**In the player.** The right column carries a **AI DJ 模型 / DJ model**
 panel: a provider picker, a model picker, and three buttons.
 
 | Control | What it does |

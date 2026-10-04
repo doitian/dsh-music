@@ -376,7 +376,7 @@ test('the URL wins over the stored preference for one request', { skip: OFFLINE 
   }
 });
 
-// ------------------------------------------------------------ curator picker
+// ------------------------------------------------------------ model picker
 
 test('the picker enumerates routes, catalogues and the current choice', async () => {
   const app = await mount({ llm: makeFakeLlm() });
