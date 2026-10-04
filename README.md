@@ -214,9 +214,15 @@ Then one of two tiers chooses:
   (recently played, favourite artists, likes, dislikes) goes to
   `ctx.llm.stream()`, and the model returns the picks and a one-line vibe. This
   is the tier that reasons about a mood.
-- **Heuristic tier** — always available: candidates are scored by artist
-  affinity, novelty against play history, and explicit like/dislike feedback,
-  then interleaved so consecutive tracks do not share an artist.
+- **Heuristic tier** — always available: candidates are scored by mood-brief
+  match and artist affinity, then interleaved so consecutive tracks do not
+  share an artist. See [Heuristic tier](#heuristic-tier).
+
+Either way, the pool never holds a track that is disliked, recently played, or
+**already in the queue** — a batch is appended, so a pick the queue already
+holds would be dropped and the batch would come up short. The model is also
+told which track its picks will follow, and is held to the count it was asked
+for.
 
 **Every model call carries a session identity.** A leaf call cannot set headers
 — `GenerateOptions` has no `headers` field — so `sessionId` is the only identity
@@ -368,7 +374,24 @@ batch; it never leaves the queue empty.
 
 ### Heuristic tier
 
-Always available, used whenever the model tier is unavailable:
+Always available, used whenever the model tier is unavailable. Each candidate
+scores:
+
+| Signal | Weight |
+|---|---|
+| matches the mood brief (keyword search) | +3.0 |
+| similar to the current or recent tracks | +0.6 |
+| per artist among the listener's most played | +2.2 |
+| per artist shared with the current track | +1.4 |
+| per artist play count in the last 60 plays | +0.15 each, capped at +1.0 |
+| VIP-only | −0.4 |
+| jitter, so repeat plans differ | 0–0.8 |
+
+The brief outweighs a favourite artist on purpose: it is the listener's explicit
+ask, and without that weight a chart hit by a favourite would outrank every
+track that matches it. The ranked list is then interleaved starting from the
+track the batch is appended after, so no two adjacent tracks share an artist —
+including the seam between the old queue and the new batch.
 
 ## Configuration
 
@@ -529,7 +552,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 114 deterministic tests: pure, like state, DJ, browser half
+npm test             # 125 deterministic tests: pure, like state, DJ, browser half
 npm run test:live    # 33 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -548,7 +571,7 @@ Or run one file directly:
 ```powershell
 node test/netease.test.mjs   # 32 pure: normalisation, quality ladder, likes, cookies, taste, player state
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
-node test/dj.test.mjs        # 37 AI DJ: model call identity, route resolution, failure reporting, queue invariants
+node test/dj.test.mjs        # 43 AI DJ: model call identity, route resolution, failure reporting, curation, queue invariants
 node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
 node test/host.test.mjs      # 33 integration: routes, streaming, curation, quality, taste
 ```

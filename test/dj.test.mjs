@@ -652,6 +652,134 @@ test('a mood brief searches NetEase for candidates', async () => {
   }
 });
 
+/** Run `body` with the ranker's jitter pinned, so heuristic orders are exact. */
+async function withoutJitter(body) {
+  const random = Math.random;
+  Math.random = () => 0;
+  try {
+    return await body();
+  } finally {
+    Math.random = random;
+  }
+}
+
+const tracksBy = (base, count, artist) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: base + index,
+    name: `${artist} ${index}`,
+    artists: [typeof artist === 'function' ? artist(index) : artist],
+    duration: 180_000,
+  }));
+
+test('queued tracks never reach the pool, so every top-up adds a full batch', async () => {
+  // The sources answer the same candidates every time, exactly as similarity
+  // expansion does from a seed that has not changed; without jitter the ranker
+  // would pick the same top three for every batch.
+  const llm = makeLlm({ fail: 'offline' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.player.dj.enabled = true;
+    harness.player.setQueue([{ id: 900, name: 'seed', artists: ['Seed'], duration: 1000 }]);
+    for (let batch = 0; batch < 3; batch += 1) {
+      const before = harness.player.queue.length;
+      const plan = await withoutJitter(() => harness.dj.topUp({ force: true }));
+      assert.equal(harness.player.queue.length - before, 3, `batch ${batch} must land in full`);
+      assert.equal(harness.player.dj.lastPlan.added, plan.tracks.length, 'the report counts what was queued');
+    }
+    const ids = harness.player.queue.map((track) => track.id);
+    assert.equal(new Set(ids).size, ids.length);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('topUp honours an explicit batch size', async () => {
+  const llm = makeLlm({ fail: 'offline' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.topUp({ force: true, count: 6 });
+    assert.equal(plan.tracks.length, 6, 'the setting is 3; the argument wins');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a model that over-picks is held to the requested count', async () => {
+  const llm = makeLlm({ reply: picks(0, 1, 2, 3, 4, 5, 6) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ count: 2 });
+    assert.deepEqual(plan.tracks.map((track) => track.id), [1000, 1001]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the model is told what its picks follow', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.player.setQueue([
+      { id: 900, name: 'Now', artists: ['Cur'], duration: 1000 },
+      { id: 901, name: 'Last', artists: ['Tail'], duration: 1000 },
+    ]);
+    await harness.dj.plan({ count: 1 });
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /Already queued after it: Last — Tail/);
+    assert.match(brief, /Your picks play after: Last — Tail/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the heuristic tier puts a mood-brief match ahead of a favourite artist', async () => {
+  const api = makeApi({
+    simiSongs: async () => [],
+    recommendSongs: async () => [],
+    personalizedNewsongs: async () => [],
+    playlistDetail: async () => ({ tracks: tracksBy(3000, 4, 'Fav') }),
+    searchSongs: async () => ({ tracks: tracksBy(5000, 4, (index) => `P${index}`) }),
+  });
+  const harness = makeDj({ api });
+  try {
+    harness.store.recordPlay({ id: 1, name: 'old', artists: ['Fav'] });
+    harness.store.recordPlay({ id: 2, name: 'older', artists: ['Fav'] });
+    const plan = await withoutJitter(() => harness.dj.plan({ prompt: 'rainy jazz', count: 3 }));
+    assert.equal(plan.source, 'heuristic');
+    assert.ok(
+      plan.tracks.every((track) => track.id >= 5000),
+      `the brief's matches lead, got ${plan.tracks.map((track) => track.name)}`,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the heuristic batch does not open on the artist it is appended after', async () => {
+  const api = makeApi({
+    simiSongs: async () => [],
+    personalizedNewsongs: async () => [],
+    playlistDetail: async () => ({ tracks: tracksBy(3000, 4, 'Tail') }),
+    recommendSongs: async () => tracksBy(1000, 4, 'Other'),
+  });
+  const harness = makeDj({ api });
+  try {
+    harness.store.recordPlay({ id: 1, name: 'old', artists: ['Tail'] });
+    harness.player.setQueue([
+      { id: 900, name: 'Now', artists: ['Cur'], duration: 1000 },
+      { id: 901, name: 'Last', artists: ['Tail'], duration: 1000 },
+    ]);
+    const plan = await withoutJitter(() => harness.dj.plan({ count: 2 }));
+    assert.deepEqual(
+      plan.tracks.map((track) => track.artists[0]),
+      ['Other', 'Tail'],
+      'the favourite is held back one slot rather than doubling up on the queue tail',
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('topUp stocks the queue without touching the transport', async () => {
   const llm = makeLlm({ fail: 'offline' });
   const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
