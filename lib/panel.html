@@ -219,6 +219,10 @@
       let state = null;
       let lyric = null;
       let lyricLine = -1;
+      /** Track whose lyrics belong in the pane; drives the fetch, per track. */
+      let lyricTrackId = null;
+      /** Bumped per request so a slow reply for a skipped track is discarded. */
+      let lyricRequest = 0;
       let volumePostAt = 0;
 
       const fmt = (ms) => {
@@ -367,8 +371,6 @@
           }
           audio.src = BASE + '/stream/' + track.id + '?level=' + encodeURIComponent(level);
           audio.load();
-          // Lyrics belong to the track, so only fetch them on a real change.
-          if (!sameTrack) loadLyrics(track.id);
         }
 
         function apply(next) {
@@ -512,6 +514,21 @@
         $('np-title').textContent = track ? track.name : '未播放 / nothing playing';
         $('np-artists').textContent = track ? (track.artists || []).join(' / ') : '';
         $('np-album').textContent = track ? track.album || '' : '';
+        // Lyrics belong to the track, and this page fetches them itself on
+        // every poll — not from the local transport's `applySource`, which
+        // only ever runs when this page owns the audio element. In the normal
+        // case the shell engine plays, so that path is dead and the pane
+        // stayed empty forever.
+        const trackId = track?.id ?? null;
+        if (trackId !== lyricTrackId) {
+          lyricTrackId = trackId;
+          if (trackId) loadLyrics(trackId);
+          else {
+            lyric = null;
+            lyricLine = -1;
+            $('lyrics').innerHTML = '<p class="hint">—</p>';
+          }
+        }
         $('play').textContent = state.playing ? '⏸' : '▶';
         $('mode').textContent = { list: '列表', single: '单曲', shuffle: '随机' }[state.mode] || '列表';
         $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
@@ -606,10 +623,15 @@
 
       // ---------------------------------------------------------------- lyrics
       async function loadLyrics(id) {
+        const request = ++lyricRequest;
         lyric = null;
+        lyricLine = -1;
         $('lyrics').innerHTML = '<p class="hint">加载中… / loading…</p>';
         try {
           const data = await api('/lyric/' + id);
+          // Skipping tracks faster than NetEase answers would otherwise let an
+          // earlier reply land on the newer track's pane.
+          if (request !== lyricRequest) return;
           if (data.noLyric || !data.lrc) {
             $('lyrics').innerHTML = '<p class="hint">纯音乐，无歌词 / instrumental</p>';
             return;
@@ -628,6 +650,7 @@
           lyric = lines;
           $('lyrics').innerHTML = lines.map((line, index) => `<p data-line="${index}">${esc(line.text || '♪')}</p>`).join('');
         } catch (error) {
+          if (request !== lyricRequest) return;
           $('lyrics').innerHTML = `<p class="hint">${esc(error.message)}</p>`;
         }
       }

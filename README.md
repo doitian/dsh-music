@@ -464,7 +464,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 65 deterministic tests: pure, DJ, browser half
+npm test             # 76 deterministic tests: pure, DJ, browser half
 npm run test:live    # 23 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -481,9 +481,9 @@ network cases inside it.
 Or run one file directly:
 
 ```powershell
-node test/netease.test.mjs   # 16 pure: normalisation, quality ladder, cookies, player state
+node test/netease.test.mjs   # 18 pure: normalisation, quality ladder, cookies, player state
 node test/dj.test.mjs        # 37 AI DJ: model call identity, route resolution, failure reporting, queue invariants
-node test/client.test.mjs    # 18 browser half, executed against a fake DOM
+node test/client.test.mjs    # 21 browser half: the engine against a fake DOM, and the page it pairs with
 node test/host.test.mjs      # 23 integration: routes, streaming, curation, quality
 ```
 
@@ -506,6 +506,14 @@ proven: **the engine creates and drives the `<audio>` element with no React
 component ever rendered**, so playback cannot depend on the Music page being
 mounted. They also cover the seek handshake, failure reporting, disposal, and
 the contract handshake.
+
+The same fake DOM boots `lib/panel.html` itself, with an engine that reports
+`playback: true` — the shell document owns the audio element. That is the case
+where the page must fetch everything it renders on its own: lyrics used to be
+requested only from the local fallback transport's `applySource`, so with the
+engine playing the pane stayed empty for every track. Three tests hold the
+line: the rendered track is asked for, one fetch per track rather than one per
+poll, and a track change replaces the pane.
 
 `npm test` runs the three deterministic files in sequence (`npm run test:all`
 adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which

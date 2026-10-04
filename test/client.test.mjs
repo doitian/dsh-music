@@ -588,3 +588,149 @@ test('the client bundle parses and keeps the engine wiring', () => {
   assert.match(CLIENT_SOURCE, /function enforce\(next\)/);
   assert.match(CLIENT_SOURCE, /enforce\(next\);/);
 });
+
+// ------------------------------------------------------------- the panel page
+/** One fake element; only the surface the page touches. */
+function makePageElement(id) {
+  const classes = new Set();
+  return {
+    id,
+    style: {},
+    dataset: {},
+    children: [],
+    value: '',
+    disabled: false,
+    textContent: '',
+    innerHTML: '',
+    src: '',
+    width: 220,
+    height: 220,
+    classList: {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      contains: (name) => classes.has(name),
+      toggle: (name, on) => {
+        const next = on === undefined ? !classes.has(name) : Boolean(on);
+        if (next) classes.add(name); else classes.delete(name);
+        return next;
+      },
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    appendChild(child) { this.children.push(child); return child; },
+    remove() {},
+    before() {},
+    focus() {},
+    showModal() {},
+    close() {},
+    getContext: () => ({ fillRect() {}, fillText() {}, fillStyle: '', font: '' }),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    closest: () => null,
+  };
+}
+
+/**
+ * Boot `lib/panel.html` itself against a fake DOM.
+ *
+ * The page is inline script, so it runs through `new Function` with just the
+ * globals it touches. The engine in `window.parent` reports `playback: true` —
+ * the shell document owns the audio element, which is the normal case and the
+ * one where the page must still fetch everything it renders by itself.
+ */
+async function bootPanel(options = {}) {
+  const state = options.state ?? stateDocument();
+  const lyricsById = options.lyricsById ?? {};
+  const requests = [];
+  const elements = new Map();
+  const intervals = [];
+
+  const document = {
+    activeElement: null,
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, makePageElement(id));
+      return elements.get(id);
+    },
+    createElement: (tag) => makePageElement(tag),
+    addEventListener() {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const window = {
+    parent: { __dshMusicEngine: { playback: true, apply() {}, sync() {}, position: () => 0 } },
+    addEventListener() {},
+  };
+  const fetch = async (url) => {
+    const path = String(url).replace(/^.*\/api/, '');
+    requests.push(path);
+    let body = {};
+    if (path === '/state') body = state;
+    else if (path === '/dj/models') body = { routes: [], selected: {}, configured: {}, source: 'auto' };
+    else if (path === '/quality') body = { levels: [] };
+    else if (path.startsWith('/lyric/')) {
+      const id = Number(path.slice('/lyric/'.length));
+      body = {
+        lrc: lyricsById[id] ?? '[00:01.00]first line\n[00:05.00]second line',
+        translated: '',
+        noLyric: false,
+      };
+    }
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+  };
+
+  const inline = [...PANEL_SOURCE.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)];
+  // A no-op `setTimeout` keeps a stray toast timer from outliving the test.
+  new Function(
+    'document', 'window', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'console',
+    inline.at(-1)[1],
+  )(
+    document, window, fetch,
+    (fn, ms) => intervals.push({ fn, ms }),
+    () => {},
+    () => 0,
+    () => {},
+    console,
+  );
+  await settle();
+
+  const lyricRequests = () => requests.filter((path) => path.startsWith('/lyric/'));
+  return {
+    state,
+    requests,
+    lyricRequests,
+    element: (id) => document.getElementById(id),
+    /** Run the page's 1.5 s poll once, the way the browser would. */
+    async poll() {
+      intervals.find((entry) => entry.ms === 1500)?.fn();
+      await settle();
+    },
+  };
+}
+
+test('the page fetches the lyrics for the track it renders, engine or not', async () => {
+  // Lyrics used to be requested only from the local fallback transport's
+  // `applySource`, which never runs while the shell engine owns the audio
+  // element — so the pane sat on "—" through every track.
+  const panel = await bootPanel();
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/123'], 'the rendered track must be asked for');
+  assert.match(panel.element('lyrics').innerHTML, /first line/, 'and the lines must reach the pane');
+});
+
+test('lyrics are fetched once per track, not once per poll', async () => {
+  const panel = await bootPanel();
+  await panel.poll();
+  await panel.poll();
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/123'], 'a repeated poll must not refetch');
+});
+
+test('a track change refetches and replaces the pane', async () => {
+  const panel = await bootPanel({ lyricsById: { 456: '[00:01.00]the next track' } });
+  assert.match(panel.element('lyrics').innerHTML, /first line/);
+
+  panel.state.current = { ...panel.state.current, id: 456, name: 'Two' };
+  await panel.poll();
+
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456']);
+  assert.match(panel.element('lyrics').innerHTML, /the next track/);
+  assert.doesNotMatch(panel.element('lyrics').innerHTML, /first line/);
+});
