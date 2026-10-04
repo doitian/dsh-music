@@ -7,6 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import test from 'node:test';
 
 import { CookieJar, LEVELS, Netease, isLevel, normalizeTrack, resizeImage } from '../lib/netease.js';
@@ -204,6 +205,58 @@ test('cookie jar merges, splits and clears cookies', () => {
   assert.equal(jar.get('NMTID'), undefined, 'clear() drops the previous session');
 
   assert.deepEqual(new CookieJar('a=1; b=2').toJSON(), { a: '1', b: '2' });
+});
+
+// ------------------------------------------------------------- audio fetch
+
+/** A loopback "CDN" that answers slowly, on a schedule the caller controls. */
+async function slowServer(handler) {
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    url: (route) => `http://127.0.0.1:${server.address().port}${route}`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+test('fetchAudio bounds the headers only, never the streaming body', async () => {
+  // Headers arrive at once; the body then trickles for ~500 ms — far past the
+  // 100 ms deadline. This is the mid-song skip regression: a whole-request
+  // timeout cut every stream still open when it fired.
+  const app = await slowServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+    let chunk = 0;
+    const timer = setInterval(() => {
+      chunk += 1;
+      if (chunk >= 10) {
+        clearInterval(timer);
+        res.end(`chunk-${chunk}`);
+      } else {
+        res.write(`chunk-${chunk};`);
+      }
+    }, 50);
+  });
+  try {
+    const api = new Netease();
+    const response = await api.fetchAudio(app.url('/track'), { headerTimeoutMs: 100 });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(body, 'chunk-1;chunk-2;chunk-3;chunk-4;chunk-5;chunk-6;chunk-7;chunk-8;chunk-9;chunk-10');
+  } finally {
+    await app.close();
+  }
+});
+
+test('fetchAudio still aborts when the headers never arrive', async () => {
+  const app = await slowServer(() => {
+    // Never answer: the deadline must still fire for a stuck connect.
+  });
+  try {
+    const api = new Netease();
+    await assert.rejects(api.fetchAudio(app.url('/track'), { headerTimeoutMs: 100 }), { name: 'AbortError' });
+  } finally {
+    await app.close();
+  }
 });
 
 // ------------------------------------------------------------ player state
