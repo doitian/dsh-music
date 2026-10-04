@@ -58,14 +58,7 @@
       #account img { width: 22px; height: 22px; border-radius: 50%; }
 
       main { display: flex; flex: 1; min-height: 0; }
-      .left { flex: 1 1 46%; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
-      .right { flex: 1 1 54%; min-width: 0; display: flex; flex-direction: column; }
-
-      .tabs { display: flex; gap: 4px; padding: 9px 12px 0; }
-      .tabs button { border-radius: 999px; }
-      .tabs button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-      .searchbar { display: flex; gap: 6px; padding: 9px 12px; }
-      .searchbar input { flex: 1; min-width: 0; }
+      .player { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 
       .scroll { overflow: auto; padding: 0 8px 16px; flex: 1; }
       .scroll::-webkit-scrollbar { width: 9px; }
@@ -85,11 +78,6 @@
       .row .dur { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; }
       .row .acts { display: none; gap: 4px; flex: none; }
       .row:hover .acts { display: flex; }
-      .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(126px, 1fr)); gap: 10px; padding: 4px 8px; }
-      .card { cursor: pointer; }
-      .card img { width: 100%; aspect-ratio: 1; border-radius: 8px; object-fit: cover; background: var(--panel); }
-      .card .name { font-size: 12px; margin-top: 5px; line-height: 1.35; max-height: 2.7em; overflow: hidden; }
-      .card .sub { color: var(--muted); font-size: 11px; }
 
       .now { padding: 14px; border-bottom: 1px solid var(--line); }
       .now-top { display: flex; gap: 14px; }
@@ -148,20 +136,7 @@
       </header>
 
       <main>
-        <section class="left">
-          <div class="tabs">
-            <button data-tab="search" class="on">搜索 Search</button>
-            <button data-tab="charts">榜单 Charts</button>
-            <button data-tab="foryou">推荐 For you</button>
-          </div>
-          <div class="searchbar" id="searchbar">
-            <input id="q" placeholder="搜索歌曲、歌手、专辑 / search songs" />
-            <button id="go" class="primary">搜索</button>
-          </div>
-          <div class="scroll" id="browser"></div>
-        </section>
-
-        <section class="right">
+        <section class="player">
           <div class="now">
             <div class="now-top">
               <img id="cover" alt="" />
@@ -244,7 +219,6 @@
       let state = null;
       let lyric = null;
       let lyricLine = -1;
-      let tab = 'search';
       let volumePostAt = 0;
 
       const fmt = (ms) => {
@@ -601,7 +575,7 @@
         if (!state) return;
         const queue = state.queue || [];
         if (queue.length === 0) {
-          $('queue').innerHTML = '<div class="empty">队列为空，搜索或打开 AI DJ / queue empty</div>';
+          $('queue').innerHTML = '<div class="empty">队列为空，用 AI DJ 或让助手补歌 / queue empty</div>';
           return;
         }
         $('queue').innerHTML = queue
@@ -672,66 +646,6 @@
         for (const el of $('lyrics').querySelectorAll('p')) el.classList.toggle('on', Number(el.dataset.line) === active);
         const current = $('lyrics').querySelector('p.on');
         if (current) current.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
-
-      // --------------------------------------------------------------- browser
-      function trackRow(track, index, context) {
-        return `<div class="row" data-play="${track.id}">
-          <span class="idx">${index + 1}</span>
-          <img src="${esc(track.picUrl || '')}" alt="" loading="lazy">
-          <span class="meta"><span class="name">${esc(track.name)}</span><span class="sub">${esc((track.artists || []).join(' / '))}${track.album ? ' · ' + esc(track.album) : ''}</span></span>
-          ${track.vip ? '<span class="tag">VIP</span>' : ''}
-          <span class="dur">${fmt(track.duration)}</span>
-          <span class="acts"><button data-queue="${track.id}" title="加入队列">＋</button></span>
-        </div>`;
-      }
-
-      async function renderBrowser() {
-        const el = $('browser');
-        if (tab === 'search') {
-          if (!el.dataset.done) el.innerHTML = '<div class="empty">搜索歌曲开始播放 / search to begin</div>';
-          return;
-        }
-        el.dataset.done = '';
-        el.innerHTML = '<div class="empty">加载中… / loading…</div>';
-        try {
-          if (tab === 'charts') {
-            const [charts, forYou] = await Promise.all([api('/charts'), api('/playlists')]);
-            el.innerHTML =
-              '<div class="section-title" style="padding-left:8px">官方榜单 Charts</div><div class="card-grid">' +
-              charts.map((chart) => `<div class="card" data-chart="${chart.id}"><img src="${esc(chart.cover || '')}" alt="" loading="lazy"><div class="name">${esc(chart.name)}</div><div class="sub">${esc(chart.updateFrequency || '')}</div></div>`).join('') +
-              '</div><div class="section-title" style="padding-left:8px">推荐歌单 Playlists</div><div class="card-grid">' +
-              forYou.map((list) => `<div class="card" data-list="${list.id}"><img src="${esc(list.cover || '')}" alt="" loading="lazy"><div class="name">${esc(list.name)}</div><div class="sub">${list.trackCount} 首</div></div>`).join('') +
-              '</div>';
-          } else {
-            const fresh = await api('/new');
-            el.innerHTML = '<div class="section-title" style="padding-left:8px">新歌推荐 New songs</div>' + fresh.map((track, index) => trackRow(track, index)).join('');
-          }
-        } catch (error) {
-          el.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
-        }
-      }
-
-      async function doSearch() {
-        const query = $('q').value.trim();
-        if (!query) return;
-        tab = 'search';
-        document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === 'search'));
-        $('browser').innerHTML = '<div class="empty">搜索中… / searching…</div>';
-        try {
-          const data = await api('/search?q=' + encodeURIComponent(query));
-          $('browser').innerHTML = data.tracks.length
-            ? `<div class="section-title" style="padding-left:8px">${data.total} 个结果</div>` + data.tracks.map((track, index) => trackRow(track, index)).join('')
-            : '<div class="empty">没有结果 / no results</div>';
-        } catch (error) {
-          $('browser').innerHTML = `<div class="empty">${esc(error.message)}</div>`;
-        }
-      }
-
-      async function playTracks(tracks, startIndex) {
-        state = await api('/play', { method: 'POST', body: { tracks, startIndex: startIndex || 0 } });
-        render();
-        pokeEngine();
       }
 
       // -------------------------------------------------------------- QR login
@@ -1027,8 +941,6 @@
       };
       $('like').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'likes', trackId: state.current.id } }).then(() => toast('已喜欢 / liked'));
       $('dislike').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'dislikes', trackId: state.current.id } }).then(() => { toast('不再推荐 / disliked'); control({ action: 'next' }); });
-      $('go').onclick = doSearch;
-      $('q').onkeydown = (event) => { if (event.key === 'Enter') doSearch(); };
 
       $('dj-toggle').onclick = async () => {
         try {
@@ -1039,37 +951,6 @@
         } catch (error) { toast(error.message); }
       };
       $('dj-prompt').onchange = () => api('/dj', { method: 'POST', body: { prompt: $('dj-prompt').value, enabled: state?.dj?.enabled } }).then((data) => { state = data; render(); }).catch((error) => toast(error.message));
-
-      document.querySelectorAll('.tabs button').forEach((button) => {
-        button.onclick = () => {
-          tab = button.dataset.tab;
-          document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b === button));
-          $('searchbar').style.display = tab === 'search' ? 'flex' : 'none';
-          $('browser').dataset.done = '';
-          renderBrowser();
-        };
-      });
-
-      $('browser').onclick = async (event) => {
-        const playId = event.target.closest('[data-play]')?.dataset.play;
-        const queueId = event.target.closest('[data-queue]')?.dataset.queue;
-        const chartId = event.target.closest('[data-chart]')?.dataset.chart;
-        const listId = event.target.closest('[data-list]')?.dataset.list;
-        try {
-          if (playId) {
-            const data = await api('/track/' + playId);
-            await playTracks([data.track], 0);
-          } else if (queueId) {
-            const data = await api('/track/' + queueId);
-            state = await api('/queue', { method: 'POST', body: { action: 'append', tracks: [data.track] } });
-            render(); pokeEngine(); toast('已加入队列 / queued');
-          } else if (chartId || listId) {
-            const data = await api('/playlist/' + (chartId || listId));
-            await playTracks(data.tracks, 0);
-            toast('播放歌单 ' + data.name);
-          }
-        } catch (error) { toast(error.message); }
-      };
 
       $('queue').onclick = async (event) => {
         const jump = event.target.closest('[data-jump]')?.dataset.jump;

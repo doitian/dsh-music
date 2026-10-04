@@ -2,17 +2,19 @@
 
 NetEase Cloud Music ([music.163.com](https://music.163.com)) playback and an AI DJ, inside DeepSeek Harness.
 
-A **Music** entry appears in the DSH sidebar. It opens a full player — search, charts, your queue, synced lyrics, an `<audio>` element that streams through the host, QR sign-in, and a continuous AI DJ. The same player is also exposed to the agent through seven tools, so it can search, queue, and curate from a conversation.
+A **Music** entry appears in the DSH sidebar. It opens a player — your queue, synced lyrics, an `<audio>` element that streams through the host, QR sign-in, and a continuous AI DJ. The same player is also exposed to the agent through seven tools, so it can search, queue, and curate from a conversation.
 
 ```
-┌ 音乐 music.163.com ───────────── [AI DJ] [mood input] [account] ┐
-│ 搜索 | 榜单 | 推荐        │  ♪ 海屿你 — 马也_Crabbit               │
-│                           │  ⏮  ▶  ⏭   列表   ♡ ✕ 🔊 ────────     │
-│  1. 海屿你                │                                        │
-│     马也_Crabbit           │  歌词 Lyrics                          │
-│  2. 明知故犯              │  [00:12.40] ...                        │
-│     Max李玄               │  播放队列 Queue (12)                   │
-└───────────────────────────┴────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ 音乐 music.163.com              [AI DJ] [mood] [account]         │
+│                                                                  │
+│ ♪ 海屿你 — 马也_Crabbit                                          │
+│ 上一首 · 播放 · 下一首 · 列表 · 喜欢 · 静音 · 音量               │
+│                                                                  │
+│ 歌词 Lyrics                                                      │
+│ [00:12.40] ...                                                   │
+│ 播放队列 Queue (12)                                              │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Install
