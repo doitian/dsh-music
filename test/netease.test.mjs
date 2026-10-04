@@ -230,6 +230,11 @@ test('fetchAudio bounds the headers only, never the streaming body', async () =>
   // timeout cut every stream still open when it fired.
   const app = await slowServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+    // writeHead only queues the headers, so without this they ride the first
+    // trickle tick — a 50 ms timer racing the 100 ms deadline below. A loaded
+    // runner delayed that tick past the deadline and aborted a request whose
+    // headers were never the problem (the publish job failed on exactly that).
+    res.flushHeaders();
     let chunk = 0;
     const timer = setInterval(() => {
       chunk += 1;
