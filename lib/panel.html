@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -128,10 +128,10 @@
   <body>
     <div id="app">
       <header>
-        <div class="brand">音乐<small>music.163.com</small></div>
+        <div class="brand"><span data-i18n="brand">Music</span><small>music.163.com</small></div>
         <div class="spacer"></div>
-        <input id="dj-prompt" placeholder="AI DJ 心情 / mood, e.g. rainy afternoon jazz" />
-        <button id="dj-toggle" title="Continuous AI DJ: keep the queue stocked">AI DJ</button>
+        <input id="dj-prompt" data-i18n-ph="djPromptPh" placeholder="AI DJ mood, e.g. rainy afternoon jazz" />
+        <button id="dj-toggle" data-i18n-title="djToggleTitle" title="Continuous AI DJ: keep the queue stocked">AI DJ</button>
         <div id="account"></div>
       </header>
 
@@ -141,7 +141,7 @@
             <div class="now-top">
               <img id="cover" alt="" />
               <div style="min-width: 0; flex: 1">
-                <div class="now-title" id="np-title">未播放 / nothing playing</div>
+                <div class="now-title" id="np-title" data-i18n="nothingPlaying">Nothing playing</div>
                 <div class="now-artists" id="np-artists"></div>
                 <div class="now-album" id="np-album"></div>
               </div>
@@ -152,30 +152,30 @@
               <span id="t-dur">0:00</span>
             </div>
             <div class="controls">
-              <button id="prev" title="上一首 previous">⏮</button>
-              <button id="play" class="primary" title="播放/暂停 play/pause">▶</button>
-              <button id="next" title="下一首 next">⏭</button>
-              <button id="mode" class="mode" title="播放模式 mode">列表</button>
-              <select id="quality" class="mode" title="流媒体音质 / streaming quality"></select>
+              <button id="prev" data-i18n-title="prev" title="Previous">⏮</button>
+              <button id="play" class="primary" data-i18n-title="playPause" title="Play/pause">▶</button>
+              <button id="next" data-i18n-title="next" title="Next">⏭</button>
+              <button id="mode" class="mode" data-i18n-title="modeTitle" data-i18n="modeList" title="Playback mode">List</button>
+              <select id="quality" class="mode" data-i18n-title="qualityTitle" title="Streaming quality"></select>
               <span id="quality-info" class="mode" style="color: var(--muted)"></span>
               <span class="grow"></span>
-              <button id="like" title="喜欢 like">♡</button>
-              <button id="dislike" title="不喜欢 dislike">✕</button>
-              <button id="mute" title="静音 mute">🔊</button>
+              <button id="like" data-i18n-title="like" title="Like">♡</button>
+              <button id="dislike" data-i18n-title="dislike" title="Dislike">✕</button>
+              <button id="mute" data-i18n-title="mute" title="Mute">🔊</button>
               <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
             </div>
           </div>
 
-          <div class="section-title">歌词 Lyrics</div>
+          <div class="section-title" data-i18n="lyrics">Lyrics</div>
           <div class="lyrics" id="lyrics"><p class="hint">—</p></div>
 
-          <div class="section-title">播放队列 Queue <span id="counts"></span></div>
+          <div class="section-title"><span data-i18n="queue">Queue</span> <span id="counts"></span></div>
           <div class="queue"><div class="scroll" id="queue"></div></div>
           <div id="dj-status"></div>
 
           <div class="dj-status" id="dj-model">
             <div class="model-head">
-              <span>AI DJ 模型 / DJ model</span>
+              <span data-i18n="djModel">DJ model</span>
               <span id="dj-model-source" style="color: var(--muted)"></span>
             </div>
             <div class="row-inline">
@@ -183,12 +183,12 @@
               <select id="dj-model-select" title="model"></select>
             </div>
             <div class="row-inline">
-              <input id="dj-model-custom" placeholder="自定义 model id / custom model id" style="display: none" />
+              <input id="dj-model-custom" data-i18n-ph="customModelPh" placeholder="Custom model id" style="display: none" />
             </div>
             <div class="row-inline">
-              <button id="dj-model-save" class="primary">保存 Save</button>
-              <button id="dj-model-test">测试 Test</button>
-              <button id="dj-model-clear" title="回退到 profile 配置 / revert to the profile patch">回退 Revert</button>
+              <button id="dj-model-save" class="primary" data-i18n="save">Save</button>
+              <button id="dj-model-test" data-i18n="test">Test</button>
+              <button id="dj-model-clear" data-i18n="revert" data-i18n-title="revertTitle" title="Revert to the profile patch">Revert</button>
             </div>
             <div id="dj-model-status" style="color: var(--muted)"></div>
           </div>
@@ -197,12 +197,12 @@
     </div>
 
     <dialog id="login">
-      <div style="font-weight: 650">网易云音乐登录 / Sign in</div>
+      <div style="font-weight: 650" data-i18n="loginTitle">NetEase Cloud Music sign in</div>
       <canvas id="qr" width="220" height="220"></canvas>
-      <div class="hint" id="qr-state">正在获取二维码… / fetching QR…</div>
+      <div class="hint" id="qr-state">Fetching QR…</div>
       <div class="row-actions">
-        <button id="qr-refresh">刷新 Refresh</button>
-        <button id="qr-close" class="primary">关闭 Close</button>
+        <button id="qr-refresh" data-i18n="refresh">Refresh</button>
+        <button id="qr-close" class="primary" data-i18n="close">Close</button>
       </div>
     </dialog>
 
@@ -214,6 +214,231 @@
       const BASE = '__BASE__';
       const API = BASE + '/api';
       const $ = (id) => document.getElementById(id);
+
+      // ------------------------------------------------------------------ i18n
+      /**
+       * Locale, without ctx.
+       *
+       * This page is served as a plain document, not a client module, so the
+       * host's `ctx.locale` service is out of reach. The shell keeps its own
+       * `<html lang>` in sync with the active locale, though, and this frame
+       * is same-origin with the shell — reading the parent's `lang`, and
+       * observing it for changes, follows the Settings language live. When
+       * the page is opened standalone there is no parent to follow, so the
+       * browser's own language decides.
+       */
+      const DICT = {
+        zh: {
+          brand: '音乐',
+          djPromptPh: 'AI DJ 心情，例如 rainy afternoon jazz',
+          djToggleTitle: '持续 AI DJ：自动补歌',
+          nothingPlaying: '未播放',
+          prev: '上一首',
+          playPause: '播放/暂停',
+          next: '下一首',
+          modeTitle: '播放模式',
+          modeList: '列表',
+          modeSingle: '单曲',
+          modeShuffle: '随机',
+          qualityTitle: '流媒体音质',
+          like: '喜欢',
+          dislike: '不喜欢',
+          mute: '静音',
+          lyrics: '歌词',
+          queue: '播放队列',
+          djModel: 'AI DJ 模型',
+          customModelPh: '自定义 model id',
+          save: '保存',
+          test: '测试',
+          revert: '回退',
+          revertTitle: '回退到 profile 配置',
+          loginTitle: '网易云音乐登录',
+          qrFetching: '正在获取二维码…',
+          qrScan: '用网易云音乐 App 扫码',
+          refresh: '刷新',
+          close: '关闭',
+          signin: '登录',
+          loginWaiting: '等待扫码',
+          loginScanned: '已扫码，请在手机上确认',
+          loginExpired: '二维码已过期，已刷新',
+          loginSuccess: '登录成功',
+          loginIdle: '未开始',
+          pollFailed: '轮询失败：',
+          resuming: '正在恢复播放…',
+          djPlanning: 'AI DJ 正在选曲…',
+          modelTierUnavailable: '模型层不可用',
+          djStocking: '持续补歌中',
+          gestureText: '浏览器需要你先与页面交互一次才会播放声音',
+          gesturePlay: '点击播放',
+          gestureNote: '在窗口任意处点击也可以',
+          queueEmpty: '队列为空，用 AI DJ 或让助手补歌',
+          remove: '移除',
+          loading: '加载中…',
+          instrumental: '纯音乐，无歌词',
+          other: '其他…',
+          noProvider: '(无 provider)',
+          srcPanel: '面板',
+          srcConfig: '配置',
+          srcAgentDefault: '会话模型',
+          srcDiscovered: '自动',
+          hostPredatesLong:
+            '宿主模块早于本功能：请完全退出并重新启动 Harness（关闭窗口不够，它会留在托盘里）',
+          hostPredatesShort: '宿主模块早于本功能',
+          pickProviderModel: '请先选择 provider 与 model',
+          saved: '已保存 {route}',
+          reverted: '已回退到 profile 配置',
+          testing: '测试中…',
+          heuristics: '已用启发式',
+          downgraded: '已降级',
+          qualitySet: '音质已设为 {level}',
+          liked: '已喜欢',
+          disliked: '不再推荐',
+          djOn: 'AI DJ 已开启',
+          djOff: 'AI DJ 已关闭',
+          connectFailed: '连接失败：',
+          'quality.jymaster': '超清母带',
+          'quality.dolby': '杜比全景声',
+          'quality.sky': '沉浸环绕声',
+          'quality.jyeffect': '沉浸声',
+          'quality.hires': 'Hi-Res 无损',
+          'quality.lossless': '无损',
+          'quality.exhigh': '极高 320 kbps',
+          'quality.higher': '较高 192 kbps',
+          'quality.standard': '标准 128 kbps',
+        },
+        en: {
+          brand: 'Music',
+          djPromptPh: 'AI DJ mood, e.g. rainy afternoon jazz',
+          djToggleTitle: 'Continuous AI DJ: keep the queue stocked',
+          nothingPlaying: 'Nothing playing',
+          prev: 'Previous',
+          playPause: 'Play/pause',
+          next: 'Next',
+          modeTitle: 'Playback mode',
+          modeList: 'List',
+          modeSingle: 'Single',
+          modeShuffle: 'Shuffle',
+          qualityTitle: 'Streaming quality',
+          like: 'Like',
+          dislike: 'Dislike',
+          mute: 'Mute',
+          lyrics: 'Lyrics',
+          queue: 'Queue',
+          djModel: 'DJ model',
+          customModelPh: 'Custom model id',
+          save: 'Save',
+          test: 'Test',
+          revert: 'Revert',
+          revertTitle: 'Revert to the profile patch',
+          loginTitle: 'NetEase Cloud Music sign in',
+          qrFetching: 'Fetching QR…',
+          qrScan: 'Scan with the NetEase app',
+          refresh: 'Refresh',
+          close: 'Close',
+          signin: 'Sign in',
+          loginWaiting: 'Waiting for scan',
+          loginScanned: 'Scanned — confirm on your phone',
+          loginExpired: 'QR expired; a fresh one is shown',
+          loginSuccess: 'Signed in',
+          loginIdle: 'Not started',
+          pollFailed: 'Poll failed: ',
+          resuming: 'Resuming…',
+          djPlanning: 'AI DJ is planning…',
+          modelTierUnavailable: 'model tier unavailable',
+          djStocking: 'keeping the queue stocked',
+          gestureText: 'Chromium needs one interaction with this window before it will play audio',
+          gesturePlay: 'Play',
+          gestureNote: 'clicking anywhere works too',
+          queueEmpty: 'Queue empty — use the AI DJ or ask the assistant to add songs',
+          remove: 'Remove',
+          loading: 'Loading…',
+          instrumental: 'Instrumental',
+          other: 'Other…',
+          noProvider: '(no provider)',
+          srcPanel: 'panel',
+          srcConfig: 'profile',
+          srcAgentDefault: 'session model',
+          srcDiscovered: 'auto',
+          hostPredatesLong:
+            'The host module predates this feature — fully quit and relaunch the harness (closing the window is not enough; it stays running in the tray)',
+          hostPredatesShort: 'Host module predates this feature',
+          pickProviderModel: 'Pick a provider and a model first',
+          saved: 'Saved {route}',
+          reverted: 'Reverted to the profile config',
+          testing: 'Testing…',
+          heuristics: 'heuristics used',
+          downgraded: 'downgraded',
+          qualitySet: 'Quality set to {level}',
+          liked: 'Liked',
+          disliked: 'Disliked',
+          djOn: 'AI DJ on',
+          djOff: 'AI DJ off',
+          connectFailed: 'Cannot reach the host: ',
+          'quality.jymaster': 'Master',
+          'quality.dolby': 'Dolby Atmos',
+          'quality.sky': 'Immersive',
+          'quality.jyeffect': 'Spatial',
+          'quality.hires': 'Hi-Res lossless',
+          'quality.lossless': 'Lossless',
+          'quality.exhigh': '320 kbps',
+          'quality.higher': '192 kbps',
+          'quality.standard': '128 kbps',
+        },
+      };
+      let LANG = 'en';
+
+      function detectLang() {
+        try {
+          const lang = window.parent?.document?.documentElement?.lang;
+          if (lang) return String(lang).toLowerCase().startsWith('zh') ? 'zh' : 'en';
+        } catch { /* standalone or cross-origin */ }
+        try {
+          return String(navigator.language || 'en').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+        } catch { return 'en'; }
+      }
+
+      /** Translate a key, interpolating `{name}` placeholders from `vars`. */
+      function t(key, vars) {
+        let text = DICT[LANG]?.[key] ?? DICT.en[key] ?? key;
+        if (vars) {
+          for (const name of Object.keys(vars)) {
+            text = text.split('{' + name + '}').join(String(vars[name]));
+          }
+        }
+        return text;
+      }
+
+      /** Static markup carries `data-i18n*` attributes; this applies them. */
+      function applyStaticStrings() {
+        for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+        for (const el of document.querySelectorAll('[data-i18n-title]')) el.title = t(el.dataset.i18nTitle);
+        for (const el of document.querySelectorAll('[data-i18n-ph]')) el.placeholder = t(el.dataset.i18nPh);
+      }
+
+      /** Re-apply every user-visible string after a language switch. */
+      function applyLocale() {
+        LANG = detectLang();
+        try {
+          document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
+        } catch { /* headless */ }
+        applyStaticStrings();
+        // The gesture hint carries markup; drop it so render() rebuilds it in
+        // the new language.
+        $('gesture')?.remove();
+        render();
+        paintModelSource();
+        paintQualityOptions();
+        if (modelRoutes.length) renderModelOptions();
+      }
+
+      /** Follow the shell's language while this page lives inside it. */
+      function watchShellLocale() {
+        try {
+          const root = window.parent?.document?.documentElement;
+          if (!root || typeof MutationObserver !== 'function') return;
+          new MutationObserver(applyLocale).observe(root, { attributes: true, attributeFilter: ['lang'] });
+        } catch { /* standalone */ }
+      }
 
       /** Last state document from the host. */
       let state = null;
@@ -502,7 +727,7 @@
         attempt();
         setTimeout(attempt, 200);
         setTimeout(attempt, 800);
-        toast('正在恢复播放… / resuming…');
+        toast(t('resuming'));
       }
 
       // ---------------------------------------------------------------- render
@@ -511,7 +736,7 @@
         const track = state.current;
         $('cover').src = track?.picUrl || '';
         $('cover').style.visibility = track?.picUrl ? 'visible' : 'hidden';
-        $('np-title').textContent = track ? track.name : '未播放 / nothing playing';
+        $('np-title').textContent = track ? track.name : t('nothingPlaying');
         $('np-artists').textContent = track ? (track.artists || []).join(' / ') : '';
         $('np-album').textContent = track ? track.album || '' : '';
         // Lyrics belong to the track, and this page fetches them itself on
@@ -530,7 +755,7 @@
           }
         }
         $('play').textContent = state.playing ? '⏸' : '▶';
-        $('mode').textContent = { list: '列表', single: '单曲', shuffle: '随机' }[state.mode] || '列表';
+        $('mode').textContent = { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList');
         $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
         $('dj-toggle').classList.toggle('on', Boolean(state.dj?.enabled));
         // The mood brief is persisted player setting, not part of the DJ status
@@ -541,18 +766,18 @@
         const account = state.account;
         $('account').innerHTML = account
           ? `${account.avatar ? `<img src="${esc(account.avatar)}" alt="">` : ''}<span>${esc(account.nickname)}${account.vip ? ' · VIP' : ''}</span>`
-          : `<button id="signin">登录 Sign in</button>`;
+          : `<button id="signin">${esc(t('signin'))}</button>`;
         const signin = $('signin');
         if (signin) signin.onclick = openLogin;
 
         // DJ status
         const dj = state.dj || {};
         $('dj-status').innerHTML = dj.enabled || dj.lastPlan
-          ? `<div class="dj-status">${dj.busy ? 'AI DJ 正在选曲… / planning…' : dj.error ? `AI DJ: ${esc(dj.error)}` : ''}${
+          ? `<div class="dj-status">${dj.busy ? esc(t('djPlanning')) : dj.error ? `AI DJ: ${esc(dj.error)}` : ''}${
               dj.lastPlan
                 ? `<div><b>${esc(dj.lastPlan.source === 'model' ? 'AI DJ' : 'AI DJ (heuristic)')}</b>${dj.lastPlan.route ? ` <span style="color:var(--muted)">${esc(dj.lastPlan.route)}</span>` : ''} +${dj.lastPlan.added}: ${esc(dj.lastPlan.vibe || '')}</div><div style="color:var(--muted)">${esc((dj.lastPlan.names || []).slice(-3).join(' · '))}</div>`
                 : ''
-            }${dj.modelError && !dj.lastPlan?.route ? `<div style="color:var(--muted)">模型层不可用 / model tier unavailable: ${esc(dj.modelError)}</div>` : ''}${dj.enabled ? '<div style="color:var(--muted);margin-top:4px">持续补歌中 / keeping the queue stocked</div>' : ''}</div>`
+            }${dj.modelError && !dj.lastPlan?.route ? `<div style="color:var(--muted)">${esc(t('modelTierUnavailable'))}: ${esc(dj.modelError)}</div>` : ''}${dj.enabled ? `<div style="color:var(--muted);margin-top:4px">${esc(t('djStocking'))}</div>` : ''}</div>`
           : '';
 
         if (autoplayBlocked()) {
@@ -560,7 +785,7 @@
             const el = document.createElement('div');
             el.id = 'gesture';
             el.className = 'need-gesture';
-            el.innerHTML = '浏览器需要你先与页面交互一次才会播放声音 / Chromium needs one interaction with this window before it will play audio — <button id="gesture-go" class="primary">点击播放 / Play</button> <span style="color:var(--muted)">在窗口任意处点击也可以 / clicking anywhere works too</span>';
+            el.innerHTML = `${esc(t('gestureText'))} — <button id="gesture-go" class="primary">${esc(t('gesturePlay'))}</button> <span style="color:var(--muted)">${esc(t('gestureNote'))}</span>`;
             $('dj-status').before(el);
             el.querySelector('#gesture-go').onclick = resumeWithGesture;
           }
@@ -592,7 +817,7 @@
         if (!state) return;
         const queue = state.queue || [];
         if (queue.length === 0) {
-          $('queue').innerHTML = '<div class="empty">队列为空，用 AI DJ 或让助手补歌 / queue empty</div>';
+          $('queue').innerHTML = `<div class="empty">${esc(t('queueEmpty'))}</div>`;
           return;
         }
         $('queue').innerHTML = queue
@@ -604,7 +829,7 @@
               <span class="meta"><span class="name">${esc(track.name)}</span><span class="sub">${esc((track.artists || []).join(' / '))}</span></span>
               ${track.vip ? '<span class="tag">VIP</span>' : ''}
               <span class="dur">${fmt(track.duration)}</span>
-              <span class="acts"><button data-remove="${index}" title="移除">✕</button></span>
+              <span class="acts"><button data-remove="${index}" title="${esc(t('remove'))}">✕</button></span>
             </div>`;
           })
           .join('');
@@ -626,14 +851,14 @@
         const request = ++lyricRequest;
         lyric = null;
         lyricLine = -1;
-        $('lyrics').innerHTML = '<p class="hint">加载中… / loading…</p>';
+        $('lyrics').innerHTML = `<p class="hint">${esc(t('loading'))}</p>`;
         try {
           const data = await api('/lyric/' + id);
           // Skipping tracks faster than NetEase answers would otherwise let an
           // earlier reply land on the newer track's pane.
           if (request !== lyricRequest) return;
           if (data.noLyric || !data.lrc) {
-            $('lyrics').innerHTML = '<p class="hint">纯音乐，无歌词 / instrumental</p>';
+            $('lyrics').innerHTML = `<p class="hint">${esc(t('instrumental'))}</p>`;
             return;
           }
           const lines = [];
@@ -698,15 +923,33 @@
         }
       }
 
+      /**
+       * The QR state line. The host's `state` field is stable vocabulary, so
+       * it localizes here; free-form host messages (agent-facing, bilingual)
+       * are the fallback for anything unknown, and a poll failure carries the
+       * raw error in `error`.
+       */
+      function loginMessage(data) {
+        if (data.error) return t('pollFailed') + data.error;
+        const key = {
+          waiting: 'loginWaiting',
+          scanned: 'loginScanned',
+          expired: 'loginExpired',
+          success: 'loginSuccess',
+          idle: 'loginIdle',
+        }[data.state];
+        return key ? t(key) : data.message || data.state;
+      }
+
       let qrTimer;
       async function openLogin() {
         const dialog = $('login');
         dialog.showModal();
-        $('qr-state').textContent = '正在获取二维码… / fetching QR…';
+        $('qr-state').textContent = t('qrFetching');
         try {
           const data = await api('/login/qr', { method: 'POST', body: {} });
           drawQr(data.loginUrl);
-          $('qr-state').textContent = '用网易云音乐 App 扫码 / scan with the NetEase app';
+          $('qr-state').textContent = t('qrScan');
         } catch (error) {
           $('qr-state').textContent = error.message;
         }
@@ -720,12 +963,12 @@
           if (data.state === 'success') {
             clearInterval(qrTimer);
             $('login').close();
-            toast('登录成功 / signed in');
+            toast(t('loginSuccess'));
             await refresh();
             return;
           }
           if (data.loginUrl) drawQr(data.loginUrl);
-          $('qr-state').textContent = data.message || data.state;
+          $('qr-state').textContent = loginMessage(data);
         } catch (error) {
           $('qr-state').textContent = error.message;
         }
@@ -741,13 +984,15 @@
        *
        * Routes and their catalogued models come from the host's LLM service.
        * The catalogue is advisory — core resolution accepts unlisted ids — so
-       * "其他… / Other…" reveals a text field for any id the route serves. A
+       * the "Other…" entry reveals a text field for any id the route serves. A
        * saved choice persists in the session document and takes precedence over
-       * the profile patch, which "回退 Revert" falls back to.
+       * the profile patch, which the "Revert" button falls back to.
        */
       let modelRoutes = [];
       let modelSelected = { provider: null, model: null };
       let modelConfigured = { provider: null, model: null };
+      /** Raw source key from the host; localized on every paint. */
+      let modelSourceRaw = '';
       const CUSTOM = '__custom__';
       const MODEL_CONTROLS = [
         'dj-provider',
@@ -773,7 +1018,7 @@
         const select = $('dj-model-select');
         select.innerHTML =
           models.map((model) => `<option value="${esc(model.id)}">${esc(model.name || model.id)}</option>`).join('') +
-          `<option value="${CUSTOM}">其他… / Other…</option>`;
+          `<option value="${CUSTOM}">${esc(t('other'))}</option>`;
 
         const pinned = modelSelected.provider === provider ? modelSelected.model : null;
         const custom = $('dj-model-custom');
@@ -789,6 +1034,17 @@
           custom.style.display = 'none';
         }
         if (route?.error) $('dj-model-status').textContent = route.error;
+      }
+
+      /** Where the effective model choice comes from, localized. */
+      function paintModelSource() {
+        const key = {
+          panel: 'srcPanel',
+          config: 'srcConfig',
+          'agent-default': 'srcAgentDefault',
+          discovered: 'srcDiscovered',
+        }[modelSourceRaw];
+        $('dj-model-source').textContent = key ? t(key) : modelSourceRaw || '';
       }
 
       async function loadModelPicker() {
@@ -808,17 +1064,12 @@
           const select = $('dj-provider');
           select.innerHTML = providers.length
             ? providers.map((provider) => `<option value="${esc(provider)}">${esc(provider)}</option>`).join('')
-            : '<option value="">(无 provider / none)</option>';
+            : `<option value="">${esc(t('noProvider'))}</option>`;
           select.value = modelSelected.provider ?? modelConfigured.provider ?? providers[0] ?? '';
           renderModelOptions();
 
-          $('dj-model-source').textContent =
-            {
-              panel: '面板 / panel',
-              config: '配置 / profile',
-              'agent-default': '会话模型 / session model',
-              discovered: '自动 / auto',
-            }[data.source] ?? data.source ?? '';
+          modelSourceRaw = data.source ?? '';
+          paintModelSource();
           $('dj-model-status').textContent = data.error ?? '';
         } catch (error) {
           // A 404 here means this page is newer than the host module: the page
@@ -827,10 +1078,7 @@
           // say that instead of showing a bare "unknown endpoint".
           if (/unknown endpoint|\b404\b/.test(error.message)) {
             setModelControls(false);
-            $('dj-model-status').textContent =
-              '宿主模块早于本功能：请完全退出并重新启动 Harness（关闭窗口不够，它会留在托盘里）/ ' +
-              'the host module predates this feature — fully quit and relaunch the harness ' +
-              '(closing the window is not enough; it stays running in the tray)';
+            $('dj-model-status').textContent = t('hostPredatesLong');
           } else {
             $('dj-model-status').textContent = error.message;
           }
@@ -863,15 +1111,15 @@
         const provider = $('dj-provider').value;
         const model = chosenModel();
         if (!provider || !model) {
-          toast('请先选择 provider 与 model / pick a provider and a model');
+          toast(t('pickProviderModel'));
           return;
         }
-        void saveModelRoute(provider, model, `已保存 / saved ${provider}/${model}`);
+        void saveModelRoute(provider, model, t('saved', { route: `${provider}/${model}` }));
       };
       $('dj-model-clear').onclick = () =>
-        void saveModelRoute('', '', '已回退到 profile 配置 / reverted to the profile config');
+        void saveModelRoute('', '', t('reverted'));
       $('dj-model-test').onclick = async () => {
-        $('dj-model-status').textContent = '测试中… / testing…';
+        $('dj-model-status').textContent = t('testing');
         try {
           const result = await api('/dj/test', { method: 'POST', body: {} });
           if (result.source === 'model') {
@@ -879,7 +1127,7 @@
               `✓ ${result.route} — ${(result.picked ?? []).join(' · ')}${result.vibe ? ` (${result.vibe})` : ''}`;
           } else {
             $('dj-model-status').textContent =
-              `✗ ${result.modelError ?? result.note ?? 'model tier unavailable'} — 已用启发式 / heuristics`;
+              `✗ ${result.modelError ?? result.note ?? t('modelTierUnavailable')} — ${t('heuristics')}`;
           }
         } catch (error) {
           $('dj-model-status').textContent = error.message;
@@ -898,6 +1146,24 @@
        */
       let qualityLevels = [];
 
+      /**
+       * One level's display name. The dictionary knows the shipped levels;
+       * anything else falls back to the host's own (bilingual) label.
+       */
+      function qualityLabel(entry) {
+        return DICT[LANG]?.['quality.' + entry.id] ?? DICT.en['quality.' + entry.id] ?? entry.label ?? entry.id;
+      }
+
+      /** Rebuild the picker options, preserving the current selection. */
+      function paintQualityOptions() {
+        if (qualityLevels.length === 0) return;
+        const current = $('quality').value;
+        $('quality').innerHTML = qualityLevels
+          .map((entry) => `<option value="${esc(entry.id)}">${esc(qualityLabel(entry))}</option>`)
+          .join('');
+        if (qualityLevels.some((entry) => entry.id === current)) $('quality').value = current;
+      }
+
       /** Caption for what the last stream actually served. */
       function paintQualityInfo() {
         const last = state?.audio?.last;
@@ -908,22 +1174,20 @@
         }
         const kbps = last.br ? ` · ${Math.round(last.br / 1000)} kbps` : '';
         $('quality-info').textContent =
-          `▶ ${String(last.type ?? '').toUpperCase()}${kbps}` + (last.downgraded ? ` (${last.served}, 已降级/downgraded)` : '');
+          `▶ ${String(last.type ?? '').toUpperCase()}${kbps}` + (last.downgraded ? ` (${last.served}, ${t('downgraded')})` : '');
       }
 
       async function loadQuality() {
         try {
           const data = await api('/quality');
           qualityLevels = data.levels ?? [];
-          $('quality').innerHTML = qualityLevels
-            .map((entry) => `<option value="${esc(entry.id)}">${esc(entry.label || entry.id)}</option>`)
-            .join('');
+          paintQualityOptions();
           $('quality').value = data.preferred ?? 'exhigh';
           paintQualityInfo();
         } catch (error) {
           // A host without this endpoint is older than this page; say so once.
           $('quality-info').textContent = /unknown endpoint|\b404\b/.test(error.message)
-            ? '宿主模块早于本功能 / host module predates this feature'
+            ? t('hostPredatesShort')
             : error.message;
         }
       }
@@ -935,7 +1199,7 @@
           applyTransport();
           pokeEngine();
           paintQualityInfo();
-          toast('音质已设为 / quality set to ' + event.target.value);
+          toast(t('qualitySet', { level: event.target.value }));
         } catch (error) {
           toast(error.message);
         }
@@ -962,15 +1226,15 @@
       $('seek').onchange = (event) => {
         control({ action: 'seek', value: Math.round((Number(event.target.value) / 1000) * durationMs()) });
       };
-      $('like').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'likes', trackId: state.current.id } }).then(() => toast('已喜欢 / liked'));
-      $('dislike').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'dislikes', trackId: state.current.id } }).then(() => { toast('不再推荐 / disliked'); control({ action: 'next' }); });
+      $('like').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'likes', trackId: state.current.id } }).then(() => toast(t('liked')));
+      $('dislike').onclick = () => state?.current && api('/feedback', { method: 'POST', body: { kind: 'dislikes', trackId: state.current.id } }).then(() => { toast(t('disliked')); control({ action: 'next' }); });
 
       $('dj-toggle').onclick = async () => {
         try {
           const data = await api('/dj', { method: 'POST', body: { enabled: !state?.dj?.enabled, prompt: $('dj-prompt').value } });
           state = data;
           render();
-          toast(state.dj?.enabled ? 'AI DJ 已开启 / AI DJ on' : 'AI DJ 已关闭 / AI DJ off');
+          toast(state.dj?.enabled ? t('djOn') : t('djOff'));
         } catch (error) { toast(error.message); }
       };
       $('dj-prompt').onchange = () => api('/dj', { method: 'POST', body: { prompt: $('dj-prompt').value, enabled: state?.dj?.enabled } }).then((data) => { state = data; render(); }).catch((error) => toast(error.message));
@@ -996,10 +1260,12 @@
           render();
           applyTransport();
         } catch (error) {
-          $('np-title').textContent = '连接失败 / cannot reach the host: ' + error.message;
+          $('np-title').textContent = t('connectFailed') + error.message;
         }
       }
 
+      applyLocale();
+      watchShellLocale();
       refresh();
       setInterval(refresh, 1500);
       void loadModelPicker();

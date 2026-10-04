@@ -132,6 +132,7 @@ async function loadClientBundle({
   playRefusals = 0,
 } = {}) {
   const registered = [];
+  const registrations = [];
   const calls = [];
   /** Shared by every created element so tests control the autoplay refusal. */
   const playState = { refusals: playRefusals, attempts: 0 };
@@ -206,8 +207,25 @@ async function loadClientBundle({
         const result = callback();
         return () => result?.dispose?.();
       },
-      register() {
+      register(spec) {
+        registrations.push(spec);
         return { dispose() {} };
+      },
+    },
+    /**
+     * A minimal `locale` service: dictionaries are recorded so tests can
+     * translate through them exactly as the host's runtime would.
+     */
+    locale: {
+      dictionaries: {},
+      register(ns, dict) {
+        this.dictionaries[ns] = dict;
+        return () => {
+          delete this.dictionaries[ns];
+        };
+      },
+      bind(ns) {
+        return (key) => this.dictionaries[ns]?.en?.[key] ?? key;
       },
     },
     inject(_deps, callback) {
@@ -222,6 +240,7 @@ async function loadClientBundle({
     body,
     calls,
     registered,
+    registrations,
     /** The state document the stub host answers with; tests may mutate it. */
     state,
     playState,
@@ -247,9 +266,38 @@ test('the bundle registers its id, apply, and inject list', async () => {
   const harness = await loadClientBundle();
   try {
     assert.equal(typeof harness.bundle.apply, 'function');
-    assert.deepEqual(harness.bundle.inject, ['slots']);
+    assert.deepEqual(harness.bundle.inject, ['slots', 'locale']);
     assert.equal(harness.bundle.PANEL_ID, 'music');
   } finally {
+    harness.restore();
+  }
+});
+
+test('the UI registers against the locale service with zh/en dictionaries', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+
+    const dict = harness.ctx.locale.dictionaries['music'];
+    assert.ok(dict, 'apply() must register the dictionary');
+    for (const key of Object.keys(dict.en)) {
+      assert.ok(dict.zh[key], `the zh dictionary must cover "${key}"`);
+    }
+    for (const key of Object.keys(dict.zh)) {
+      assert.ok(dict.en[key], `the en dictionary must cover "${key}"`);
+    }
+
+    const sidebar = harness.registrations.find((spec) => spec.name === 'sidebar.panellist');
+    const main = harness.registrations.find((spec) => spec.name === 'main');
+    assert.equal(sidebar.locale, 'music', 'the sidebar entry follows the locale');
+    assert.equal(main.locale, 'music', 'the page follows the locale');
+    assert.equal(typeof sidebar.label, 'function', 'the label resolves at render time');
+    assert.equal(sidebar.label(), 'Music');
+    assert.equal(dict.zh.panel, '音乐');
+  } finally {
+    await dispose?.();
     harness.restore();
   }
 });

@@ -63,6 +63,11 @@ need no reinstall. Note that this is what makes a plugin *remount* re-read the
 served page while the module stays cached — see
 [Reloading a change](#reloading-a-change).
 
+**Language.** The UI follows the Harness language (Settings → Language): the
+sidebar label and error page register a zh/en dictionary with the host's
+`locale` service, and the player page follows the shell's `<html lang>` live.
+Switching language re-renders both in place — no restart.
+
 While a profile is linked, the Desktop app's **Add plugin** flow is the wrong
 tool for it: that flow installs the published tarball, which replaces the
 `link:` dependency. Re-add the link if it happens.
