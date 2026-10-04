@@ -1,0 +1,39 @@
+name: live
+
+# The integration suite drives the real NetEase Cloud Music API. GitHub's
+# runners cannot reach it: from a US runner `/api/search/get/web` answers in
+# ~350 ms with an empty result set, so `search resolves real tracks` fails on a
+# network condition that has nothing to do with this code.
+#
+# It is therefore not scheduled and not run on push — a check that can never
+# pass in its environment is worse than no check, because a permanently red mark
+# trains everyone to ignore red. Run it locally before a release
+# (`npm run test:live`), or dispatch this workflow from a runner that can reach
+# NetEase; add a `schedule:` trigger back once a dispatched run has passed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: NetEase API compatibility
+        run: npm run test:live
+
+      - name: Name the likely cause when it fails
+        if: failure()
+        run: |
+          echo "::warning::The live suite failed. Check first whether this runner could reach" \
+            "music.163.com at all — an empty search result is the environmental failure mode," \
+            "not a regression. `npm run test:live` on a machine that can reach NetEase is the" \
+            "authoritative check."

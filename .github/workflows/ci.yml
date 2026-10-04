@@ -47,18 +47,6 @@ jobs:
               || { echo "::error::$required is missing from the published tarball"; exit 1; }
           done
 
-  live:
-    # The integration suite drives the real NetEase Cloud Music API, so it is
-    # informational: upstream availability must not gate a release. A red run
-    # here means NetEase changed something, not that the code is broken.
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: NetEase API compatibility
-        run: npm run test:live
+# The integration suite that drives the real NetEase API lives in live.yml, not
+# here: GitHub's runners cannot reach music.163.com, so running it on every push
+# would only ever produce a red mark that means nothing.
