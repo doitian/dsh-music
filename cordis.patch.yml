@@ -1,0 +1,22 @@
+# NetEase Cloud Music bundle for DeepSeek Harness.
+#
+# This bundle inserts its own plugin entry: the host half (NetEase session,
+# playback queue, audio proxy, agent tools) and the browser half (the sidebar
+# page) both come from the single package named below.
+#
+# Everything has a default inside the package, so this profile stays empty.
+# Optional fields under `config`:
+#   apiPrefix          route prefix (default `music`) — keep it `music` unless
+#                      you also rebuild the browser half.
+#   dataDir            where session.json lives (default $DSH_HOME/music).
+#   audioLevel         exhigh (320 kbps, default) | standard | higher | lossless
+#   requestTimeoutMs   NetEase request deadline (default 15000).
+#   dj.provider        model route for the AI DJ's model tier, e.g. opencode-go.
+#   dj.model           exact model id, e.g. deepseek-v4.1-flash.
+#
+# Without `dj.provider`/`dj.model` the DJ still works: it falls back to scoring
+# similar songs, the daily recommendations and the charts by the listener's
+# liked artists, novelty and feedback.
+- insert:
+    - id: music
+      name: '@doitian/dsh-music'

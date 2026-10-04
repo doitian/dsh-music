@@ -1,0 +1,69 @@
+{
+  "name": "@doitian/dsh-music",
+  "version": "0.1.0",
+  "description": "NetEase Cloud Music (music.163.com) player and AI DJ for DeepSeek Harness: a sidebar page with in-app playback, QR sign-in, and agent tools that curate the queue.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek-harness",
+    "music",
+    "netease",
+    "music.163.com",
+    "player",
+    "dj"
+  ],
+  "license": "MIT",
+  "author": "doitian",
+  "homepage": "https://github.com/doitian/dsh-music#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doitian/dsh-music.git"
+  },
+  "bugs": {
+    "url": "https://github.com/doitian/dsh-music/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/netease.js",
+    "lib/session.js",
+    "lib/state.js",
+    "lib/dj.js",
+    "lib/router.js",
+    "lib/panel.html",
+    "lib/vendor/qrcode.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "node --check lib/index.js && node --check lib/client.js && node --check lib/netease.js && node --check lib/session.js && node --check lib/state.js && node --check lib/dj.js && node --check lib/router.js",
+    "test": "node test/netease.test.mjs && node test/dj.test.mjs && node test/client.test.mjs",
+    "test:live": "node test/host.test.mjs",
+    "test:all": "npm test && npm run test:live"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

@@ -1,0 +1,513 @@
+/**
+ * AI DJ tests, including the model tier.
+ *
+ * The model tier talks to `ctx.llm.stream()`, whose chunk vocabulary is
+ * documented but was never exercised here. These tests drive it with a stub
+ * service that emits the documented chunks, so both the happy path and every
+ * fallback are covered without a provider.
+ *
+ * No network. Run with `node test/dj.test.mjs`.
+ *
+ * @module dsh-music/test/dj
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { AiDj } from '../lib/dj.js';
+import { Player } from '../lib/state.js';
+import { SessionStore } from '../lib/session.js';
+
+// --------------------------------------------------------------- fixtures
+
+/** Disjoint id ranges per source make the candidate pool order predictable. */
+function makeApi(overrides = {}) {
+  const range = (base, count, origin) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: base + index,
+      name: `${origin} ${index}`,
+      artists: [`Artist ${index % 3}`],
+      album: `${origin} album`,
+      duration: 180_000,
+      picUrl: `http://p1.music.126.net/${base + index}.jpg`,
+      fee: 8,
+      vip: false,
+    }));
+  const daily = range(1000, 4, 'daily');
+  const fresh = range(2000, 4, 'new');
+  const chart = range(3000, 4, 'chart');
+  const similar = range(4000, 4, 'similar');
+  const prompt = range(5000, 4, 'prompt');
+
+  return {
+    daily,
+    fresh,
+    chart,
+    similar,
+    prompt,
+    simiSongs: async (_id, { limit } = {}) => similar.slice(0, limit ?? similar.length),
+    searchSongs: async (_query, { limit } = {}) => ({ total: prompt.length, tracks: prompt.slice(0, limit ?? prompt.length) }),
+    recommendSongs: async () => daily,
+    personalizedNewsongs: async () => fresh,
+    playlistDetail: async () => ({ id: 1, name: 'chart', tracks: chart }),
+    withCovers: async (tracks) => tracks,
+    ...overrides,
+  };
+}
+
+/**
+ * A stub LLM service emitting the documented stream chunks.
+ * @see {@link AiDj} — the model tier reads `type`/`kind` and `text`.
+ */
+function makeLlm({ reply, fail, kind = 'type', providers, models } = {}) {
+  const calls = [];
+  return {
+    calls,
+    listProviders: () => providers ?? [{ id: 'opencode-go' }, { id: 'xiaomi-token-plan-cn' }],
+    listModels: async (provider) =>
+      (models ?? { 'opencode-go': [{ id: 'minimax-m3' }, { id: 'deepseek-v4-flash' }], 'xiaomi-token-plan-cn': [{ id: 'qwen3-max' }] })[provider] ?? [],
+    stream(options) {
+      calls.push(options);
+      return (async function* chunks() {
+        if (fail) {
+          yield { type: 'finish', reason: { kind: 'error' }, failure: new Error(fail) };
+          return;
+        }
+        const half = Math.ceil((reply ?? '').length / 2);
+        // Deliberately emit under the `kind` spelling for half the suite: the
+        // service README documents `kind` while the implementation emits
+        // `type`, and the assembler must accept either.
+        const delta = kind === 'kind' ? { kind: 'text-delta' } : { type: 'text-delta' };
+        yield { ...delta, index: 0, text: reply.slice(0, half) };
+        yield { ...delta, index: 0, text: reply.slice(half) };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      })();
+    },
+  };
+}
+
+/** Build a DJ over real Player/SessionStore and stub everything external. */
+function makeDj({ api = makeApi(), llm, model = {} } = {}) {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-dj-'));
+  const store = new SessionStore({ file: path.join(dataDir, 'session.json') });
+  store.load();
+  store.updateSettings({ djBatchSize: 3, djAutoExtendBelow: 2, djPrompt: '' });
+  const player = new Player();
+  const dj = new AiDj({
+    api,
+    player,
+    store,
+    resolveLlm: () => llm,
+    logger: { info() {}, warn() {}, debug() {} },
+    model,
+  });
+  return { dj, player, store, api, cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
+}
+
+const picks = (...indices) => JSON.stringify({ vibe: 'late night drive', picks: indices.map((index) => ({ index, why: 'fits' })) });
+
+// ------------------------------------------------------------ model tier
+
+test('the model tier curates when a route is pinned', async () => {
+  const llm = makeLlm({ reply: picks(3, 1) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } });
+  try {
+    const plan = await harness.dj.plan({ prompt: 'rainy afternoon jazz', count: 3 });
+
+    assert.equal(plan.source, 'model');
+    assert.equal(plan.route, 'opencode-go/deepseek-v4.1-flash');
+    assert.equal(plan.vibe, 'late night drive');
+    // The pinned route must be the one actually called.
+    assert.equal(llm.calls[0].provider, 'opencode-go');
+    assert.equal(llm.calls[0].model, 'deepseek-v4.1-flash');
+    // With a mood brief, prompt matches carry priority 0 and lead the pool, so
+    // indices 3 and 1 select the fourth and second search hits.
+    assert.deepEqual(plan.tracks.map((track) => track.id), [5003, 5001]);
+
+    // The prompt must carry the mood and the catalogue the model chooses from.
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /rainy afternoon jazz/);
+    assert.match(brief, /CANDIDATES/);
+    assert.match(brief, /prompt 0/, 'the search hits are the candidates');
+    assert.match(llm.calls[0].messages[0].content[0].text, /JSON only/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the model tier accepts the `kind` chunk spelling', async () => {
+  // The service README documents `kind`; the implementation emits `type`.
+  const llm = makeLlm({ reply: picks(0), kind: 'kind' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.source, 'model', 'the assembler must read either spelling');
+    assert.deepEqual(plan.tracks.map((track) => track.id), [1000]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('out-of-range and repeated picks are discarded', async () => {
+  const llm = makeLlm({ reply: picks(0, 0, 99, 2, -3) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ count: 3 });
+    assert.deepEqual(plan.tracks.map((track) => track.id), [1000, 1002], 'duplicates and invalid indices drop');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('prose around the JSON is tolerated', async () => {
+  const llm = makeLlm({ reply: `Sure! Here is my set:\n\`\`\`json\n${picks(1)}\n\`\`\`\nEnjoy.` });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.source, 'model');
+    assert.deepEqual(plan.tracks.map((track) => track.id), [1001]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a malformed reply falls back to the heuristic tier', async () => {
+  const llm = makeLlm({ reply: 'I would rather not answer in JSON.' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ count: 3 });
+    assert.equal(plan.source, 'heuristic');
+    assert.match(plan.note, /model tier unavailable/);
+    assert.match(plan.note, /no JSON object/, 'the reason is carried, not swallowed');
+    assert.match(harness.dj.modelError, /no JSON object/);
+    assert.equal(plan.tracks.length, 3, 'the queue is still stocked');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a failed model stream falls back and records why', async () => {
+  const llm = makeLlm({ fail: 'RATE_LIMIT' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ count: 2 });
+    assert.equal(plan.source, 'heuristic');
+    assert.match(plan.note, /RATE_LIMIT/);
+    assert.match(harness.dj.modelError, /RATE_LIMIT/);
+    // A top-up surfaces the same reason to the panel and `/music/health`.
+    await harness.dj.topUp({ force: true });
+    assert.match(harness.player.dj.modelError, /RATE_LIMIT/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a missing LLM service is reported as such, not as a model failure', async () => {
+  const harness = makeDj({ llm: undefined });
+  try {
+    const plan = await harness.dj.plan({ count: 2 });
+    assert.equal(plan.source, 'heuristic');
+    assert.match(plan.note, /no LLM service is mounted/);
+    assert.match(harness.dj.modelError, /no LLM service is mounted/);
+    assert.equal(plan.tracks.length, 2, 'the queue is still stocked without a model');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a successful model plan clears the recorded reason', async () => {
+  const llm = makeLlm({ fail: 'RATE_LIMIT' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    await harness.dj.plan({ count: 1 });
+    assert.ok(harness.dj.modelError, 'a reason is recorded first');
+
+    // Retry with a working stream.
+    const working = makeLlm({ reply: picks(0) });
+    harness.dj.resolveLlm = () => working;
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.source, 'model');
+    assert.equal(harness.dj.modelError, null, 'success clears the stale reason');
+    assert.equal(harness.player.dj.modelError, null);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('an incomplete pin that cannot be completed names what it tried', async () => {
+  // A pin with no model needs the catalogue to fill the gap; when that comes
+  // back empty the reason has to name the half-configured pair, because the
+  // user's config is the thing to fix.
+  const llm = makeLlm({ reply: picks(0), providers: [{ id: 'opencode-go' }], models: {} });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go' } });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.source, 'heuristic');
+    assert.match(harness.dj.modelError, /opencode-go\/\?/, 'the configured pair is named');
+    assert.equal(llm.calls.length, 0, 'no provider call is attempted without a model');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('an empty pick list falls back to the heuristic tier', async () => {
+  const llm = makeLlm({ reply: JSON.stringify({ vibe: 'nothing fits', picks: [] }) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ count: 2 });
+    assert.equal(plan.source, 'heuristic');
+    assert.equal(plan.tracks.length, 2);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// ------------------------------------------------------------- discovery
+
+test('discovery picks the first provider and its first catalogue model', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.route, 'opencode-go/minimax-m3', 'discovery is a convenience, not a recommendation');
+    assert.equal(llm.calls[0].provider, 'opencode-go');
+    assert.equal(llm.calls[0].model, 'minimax-m3');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a pinned provider alone wins over the first one', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm, model: { provider: 'xiaomi-token-plan-cn' } });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.route, 'xiaomi-token-plan-cn/qwen3-max');
+    assert.equal(llm.calls[0].provider, 'xiaomi-token-plan-cn');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a pinned model alone wins over the first catalogue model', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm, model: { model: 'deepseek-v4-flash' } });
+  try {
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.route, 'opencode-go/deepseek-v4-flash');
+    assert.equal(llm.calls[0].model, 'deepseek-v4-flash');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a host with no adapters yields no model tier', async () => {
+  const llm = makeLlm({ reply: picks(0), providers: [] });
+  const harness = makeDj({ llm });
+  try {
+    const plan = await harness.dj.plan({ count: 2 });
+    assert.equal(plan.source, 'heuristic');
+    assert.equal(llm.calls.length, 0, 'nothing to call');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('an adapter that fails to list models yields no model tier', async () => {
+  const llm = makeLlm({ reply: picks(0), models: {} });
+  const harness = makeDj({ llm });
+  try {
+    const plan = await harness.dj.plan({ count: 2 });
+    assert.equal(plan.source, 'heuristic');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// ------------------------------------------------------- curator listing
+
+test('listRoutes reports the routes and catalogues the picker shows', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm });
+  try {
+    const listed = await harness.dj.listRoutes();
+    assert.equal(listed.error, null);
+    assert.deepEqual(
+      listed.routes.map((route) => route.provider),
+      ['opencode-go', 'xiaomi-token-plan-cn'],
+    );
+    assert.deepEqual(
+      listed.routes[0].models,
+      [
+        { id: 'minimax-m3', name: 'minimax-m3' },
+        { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' },
+      ],
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('listRoutes explains an absent model service instead of returning nothing', async () => {
+  const harness = makeDj({ llm: undefined });
+  try {
+    const listed = await harness.dj.listRoutes();
+    assert.deepEqual(listed.routes, []);
+    assert.match(listed.error, /no LLM service is mounted/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('listRoutes keeps a provider whose catalogue fails', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  llm.listModels = async (provider) => {
+    if (provider === 'opencode-go') throw new Error('catalogue unavailable');
+    return [{ id: 'qwen3-max', name: 'Qwen3 Max' }];
+  };
+  const harness = makeDj({ llm });
+  try {
+    const listed = await harness.dj.listRoutes();
+    assert.equal(listed.error, null, 'one broken catalogue does not hide the other route');
+    assert.deepEqual(listed.routes[0], { provider: 'opencode-go', models: [], error: 'could not list models: catalogue unavailable' });
+    assert.deepEqual(listed.routes[1].models, [{ id: 'qwen3-max', name: 'Qwen3 Max' }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('setModel switches the route and clears the previous verdict', async () => {
+  const failing = makeLlm({ fail: 'RATE_LIMIT' });
+  const harness = makeDj({ llm: failing, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    await harness.dj.plan({ count: 1 });
+    assert.match(harness.dj.modelError, /RATE_LIMIT/);
+
+    // Picking a different route invalidates the old verdict.
+    harness.dj.setModel({ provider: 'xiaomi-token-plan-cn', model: 'qwen3-max' });
+    assert.equal(harness.dj.modelError, null);
+    assert.equal(harness.player.dj.modelError, null);
+
+    const working = makeLlm({ reply: picks(0) });
+    harness.dj.resolveLlm = () => working;
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.route, 'xiaomi-token-plan-cn/qwen3-max', 'the new route is used');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('setModel accepts clearing a half so discovery can fill it', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm, model: { provider: 'xiaomi-token-plan-cn', model: 'qwen3-max' } });
+  try {
+    harness.dj.setModel({ provider: null, model: null });
+    assert.equal(harness.dj.modelConfigured, false);
+    const plan = await harness.dj.plan({ count: 1 });
+    assert.equal(plan.route, 'opencode-go/minimax-m3', 'discovery takes over once unpinned');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// -------------------------------------------------- pool and queue behaviour
+
+test('disliked and recently played tracks never reach the pool', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.store.recordFeedback('dislikes', 1001);
+    harness.store.recordPlay({ id: 1002, name: 'daily 2', artists: ['Artist 2'] });
+
+    const plan = await harness.dj.plan({ count: 4 });
+    const ids = plan.tracks.map((track) => track.id);
+    assert.equal(ids.includes(1001), false, 'a disliked track is excluded');
+    assert.equal(ids.includes(1002), false, 'a recently played track is excluded');
+
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /Recently played/, 'the digest reaches the model');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a mood brief searches NetEase for candidates', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ prompt: '90s cantopop', count: 2 });
+    const ids = plan.tracks.map((track) => track.id);
+    // Prompt matches carry priority 0, so they lead the pool.
+    assert.ok(ids.every((id) => id >= 5000 && id < 5004), `expected prompt matches, got ${ids}`);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('topUp stocks the queue without touching the transport', async () => {
+  const llm = makeLlm({ fail: 'offline' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.player.dj.enabled = true;
+    harness.player.setPlaying(false);
+
+    const plan = await harness.dj.topUp({ force: true });
+    assert.ok(plan, 'a forced top-up always plans');
+    assert.equal(harness.player.queue.length, plan.tracks.length);
+    assert.equal(harness.player.playing, false, 'the DJ never starts playback');
+    assert.equal(harness.player.index, 0, 'but the refilled queue becomes current');
+    assert.equal(harness.player.dj.lastPlan.added, plan.tracks.length);
+    assert.equal(harness.player.dj.lastPlan.source, 'heuristic');
+    assert.equal(harness.player.dj.busy, false, 'the busy flag is released');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('topUp is a no-op while the queue is deep enough', async () => {
+  const llm = makeLlm({ fail: 'offline' });
+  const harness = makeDj({ llm });
+  try {
+    harness.player.dj.enabled = true;
+    harness.player.setQueue(Array.from({ length: 8 }, (_, index) => ({ id: 900 + index, name: `q${index}`, artists: ['A'], duration: 1000 })));
+    harness.player.jump(0);
+
+    const plan = await harness.dj.topUp();
+    assert.equal(plan, null, 'no plan when enough tracks remain');
+    assert.equal(harness.player.queue.length, 8);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a concurrent top-up cannot double-plan', async () => {
+  const llm = makeLlm({ reply: picks(0, 1) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.player.dj.enabled = true;
+    const [first, second] = await Promise.all([harness.dj.topUp({ force: true }), harness.dj.topUp({ force: true })]);
+    assert.equal([first, second].filter(Boolean).length, 1, 'the busy flag admits one plan at a time');
+    assert.equal(llm.calls.length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('start() enables the DJ and plays the plan', async () => {
+  const llm = makeLlm({ reply: picks(0, 1, 2) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.start({ prompt: 'focus', count: 3 });
+    assert.equal(plan.tracks.length, 3);
+    assert.equal(harness.player.dj.enabled, true);
+    assert.equal(harness.store.settings.djEnabled, true, 'the preference persists');
+    assert.equal(harness.store.settings.djPrompt, 'focus');
+    assert.equal(harness.player.playing, true, 'start() is an explicit play request');
+    assert.equal(harness.player.dj.lastPlan.route, 'opencode-go/m');
+  } finally {
+    harness.cleanup();
+  }
+});

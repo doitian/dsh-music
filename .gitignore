@@ -1,0 +1,16 @@
+# Dependencies (the package has none, but keep a stray install out of the repo)
+node_modules/
+package-lock.json
+
+# Packed artifacts
+*.tgz
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local runtime state: a plugin data directory if one is ever pointed here
+session.json
