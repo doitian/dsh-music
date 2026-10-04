@@ -1,0 +1,64 @@
+name: publish
+
+# Publishes with npm trusted publishing (OIDC). There is deliberately no
+# NODE_AUTH_TOKEN and no NPM_TOKEN secret anywhere in this workflow: adding one
+# would disable the OIDC exchange and make the publish fail.
+#
+# One-time setup, by the package owner (npm 11.6 or later):
+#
+#   npm login
+#   npm trust github @doitian/dsh-music \
+#     --file publish.yml \
+#     --repo doitian/dsh-music \
+#     --allow-publish
+#
+# --allow-publish is required. Add --dry-run first to see what it would create.
+# Omit --environment, matching this job, which declares no `environment:`; a
+# configured environment must match exactly or the OIDC exchange is rejected.
+# If the registry reports the package as missing, publish 0.1.0 once by hand and
+# attach the publisher afterwards.
+#
+# Releasing: bump `version` in package.json, commit, then create a GitHub
+# release whose tag is `v<version>` (the tag/version check below enforces it).
+# Publishing on `release: published` means a tag push alone does not publish.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # exchanged for a short-lived publish token; required
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+
+      - name: Syntax-check every module
+        run: npm run check
+
+      - name: Deterministic suites (no network)
+        run: npm test
+
+      - name: Require the release tag to match package.json
+        if: github.event_name == 'release'
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag '$tag' does not match package.json version '$pkg'"
+            exit 1
+          fi
+
+      # `npm publish`, not `pnpm publish`: pnpm does not perform the OIDC
+      # trusted-publishing exchange.
+      - name: Publish to npm
+        run: npm publish --access public

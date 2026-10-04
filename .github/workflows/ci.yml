@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # No install step on purpose: the package has zero dependencies, and its
+      # tests run on node:test plus the global fetch. There is no lockfile to
+      # restore, and `npm ci` would fail without one.
+      - name: Syntax-check every module
+        run: npm run check
+
+      - name: Deterministic suites (no network)
+        run: npm test
+
+      - name: Check what the tarball would actually contain
+        run: |
+          npm pack --dry-run 2>&1 | tee "$RUNNER_TEMP/pack.txt"
+          for required in \
+            cordis.patch.yml \
+            icon.svg \
+            lib/index.js \
+            lib/client.js \
+            lib/netease.js \
+            lib/session.js \
+            lib/state.js \
+            lib/dj.js \
+            lib/router.js \
+            lib/panel.html \
+            lib/vendor/qrcode.js
+          do
+            grep -q "$required" "$RUNNER_TEMP/pack.txt" \
+              || { echo "::error::$required is missing from the published tarball"; exit 1; }
+          done
+
+  live:
+    # The integration suite drives the real NetEase Cloud Music API, so it is
+    # informational: upstream availability must not gate a release. A red run
+    # here means NetEase changed something, not that the code is broken.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: NetEase API compatibility
+        run: npm run test:live
