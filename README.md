@@ -61,6 +61,10 @@ need no reinstall. Note that this is what makes a plugin *remount* re-read the
 served page while the module stays cached — see
 [Reloading a change](#reloading-a-change).
 
+While a profile is linked, the Desktop app's **Add plugin** flow is the wrong
+tool for it: that flow installs the published tarball, which replaces the
+`link:` dependency. Re-add the link if it happens.
+
 ### Either way
 
 The bundle's own `cordis.patch.yml` inserts the plugin entry, so no
@@ -461,6 +465,35 @@ is blocked in sandboxed environments.
 `lib/vendor/qrcode.js` is the MIT-licensed
 [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) by
 Kazuhiko Arase, vendored so QR sign-in needs no network call or build step.
+
+### Releasing
+
+Releases are cut from GitHub and published by the `publish` workflow with **npm
+trusted publishing (OIDC)**. There is no `NPM_TOKEN` secret and no
+`NODE_AUTH_TOKEN` in the repository, and adding one would disable the OIDC
+exchange and break publishing.
+
+1. Bump `version` in `package.json`, commit, and push.
+2. Create a GitHub release whose tag is `v<version>` — `v0.1.2` for `0.1.2` —
+   pointing at that commit.
+
+The workflow runs `npm run check`, the deterministic suites, asserts the tag
+matches `package.json`, and publishes. A tag push alone publishes nothing: the
+trigger is `release: published`.
+
+Two timings look like failures and are not:
+
+- **A green job is not yet a live version.** The registry records a
+  `0.0.0-stage` placeholder first and reports the package as *being processed*;
+  the version becomes installable roughly a minute later. Inside that window the
+  packument still answers `404`, and publishing the same version from a second
+  place is refused with `409 Cannot publish over previously staged version`.
+- **Registry reads can lag the publish**, so an `npm view` run immediately
+  afterwards may still say `404`. Wait a minute, or read it from CI instead.
+
+Versions published this way carry a SLSA provenance attestation naming the
+workflow, tag, and commit — `npm view @doitian/dsh-music@<version> dist.attestations`.
+`0.1.0` predates the trusted publisher: it was published by hand and has none.
 
 ## Known limitations
 

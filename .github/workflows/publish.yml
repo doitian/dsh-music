@@ -4,7 +4,14 @@ name: publish
 # NODE_AUTH_TOKEN and no NPM_TOKEN secret anywhere in this workflow: adding one
 # would disable the OIDC exchange and make the publish fail.
 #
-# One-time setup, by the package owner (npm 11.6 or later):
+# The trust is attached. Inspect it with `npm trust list @doitian/dsh-music`:
+#
+#   id d2137897-6505-4ec1-bfcc-d82638e56b90, type github, file publish.yml,
+#   repository doitian/dsh-music, permissions createPackage + createStagedPackage
+#
+# Re-attaching is a one-time setup, by the package owner (npm 11.15 or later).
+# It needs the package to exist already — `npm trust` refuses a name that does
+# not, so a brand-new package takes one hand publish first:
 #
 #   npm login
 #   npm trust github @doitian/dsh-music \
@@ -12,15 +19,22 @@ name: publish
 #     --repo doitian/dsh-music \
 #     --allow-publish
 #
-# --allow-publish is required. Add --dry-run first to see what it would create.
-# Omit --environment, matching this job, which declares no `environment:`; a
+# --allow-publish is required, and --dry-run shows what it would create. Omit
+# --environment, matching this job, which declares no `environment:`; a
 # configured environment must match exactly or the OIDC exchange is rejected.
-# If the registry reports the package as missing, publish 0.1.0 once by hand and
-# attach the publisher afterwards.
+# The registry keeps one trust config per package: revoke with
+# `npm trust revoke --id <id> @doitian/dsh-music` before creating a different one.
 #
 # Releasing: bump `version` in package.json, commit, then create a GitHub
 # release whose tag is `v<version>` (the tag/version check below enforces it).
 # Publishing on `release: published` means a tag push alone does not publish.
+#
+# Green does not mean live. The registry first records a 0.0.0-stage
+# placeholder, answers "being processed", and serves the version about a minute
+# later; until then the packument still 404s and a second publish of the same
+# version is refused with "409 Cannot publish over previously staged version".
+# Hand-dispatching this workflow is therefore only useful for a version that
+# does not exist yet — otherwise it stops at that 409.
 
 on:
   release:
