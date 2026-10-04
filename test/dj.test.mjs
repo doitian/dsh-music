@@ -62,7 +62,7 @@ function makeApi(overrides = {}) {
  * A stub LLM service emitting the documented stream chunks.
  * @see {@link AiDj} — the model tier reads `type`/`kind` and `text`.
  */
-function makeLlm({ reply, fail, kind = 'type', providers, models } = {}) {
+function makeLlm({ reply, fail, kind = 'type', providers, models, chunks } = {}) {
   const calls = [];
   return {
     calls,
@@ -71,9 +71,17 @@ function makeLlm({ reply, fail, kind = 'type', providers, models } = {}) {
       (models ?? { 'opencode-go': [{ id: 'minimax-m3' }, { id: 'deepseek-v4-flash' }], 'xiaomi-token-plan-cn': [{ id: 'qwen3-max' }] })[provider] ?? [],
     stream(options) {
       calls.push(options);
-      return (async function* chunks() {
+      return (async function* emitted() {
+        // `chunks` yields a verbatim stream, for asserting on protocol shapes.
+        if (chunks) {
+          for (const chunk of chunks) yield chunk;
+          return;
+        }
         if (fail) {
-          yield { type: 'finish', reason: { kind: 'error' }, failure: new Error(fail) };
+          // The real terminal shape: the descriptor is `reason.failure`, and it
+          // carries the stable code. There is no top-level `failure`.
+          const failure = typeof fail === 'string' ? { message: fail, code: 'PROVIDER_ERROR' } : fail;
+          yield { type: 'finish', reason: { kind: 'error', failure } };
           return;
         }
         const half = Math.ceil((reply ?? '').length / 2);
@@ -322,6 +330,82 @@ test('an adapter that fails to list models yields no model tier', async () => {
   try {
     const plan = await harness.dj.plan({ count: 2 });
     assert.equal(plan.source, 'heuristic');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// ------------------------------------------------------- failure reporting
+
+test('a provider failure reports its stable code, not just its message', async () => {
+  // Regression: the descriptor lives at `reason.failure`. Reading only a
+  // top-level `failure` discarded the code and invented `Error: error`, which
+  // turned a provider outage into an unactionable line.
+  const harness = makeDj({
+    llm: makeLlm({ chunks: [{ type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', message: 'error' } } }] }),
+    model: { provider: 'opencode-go', model: 'm' },
+  });
+  try {
+    await harness.dj.plan({ count: 1 });
+    assert.match(harness.dj.modelError, /AUTH/, 'the documented code must survive');
+    assert.doesNotMatch(harness.dj.modelError, /^Error: error$/, 'and must not be replaced by a guess');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('an aborted stream reports ABORTED when the failure carries no code', async () => {
+  const harness = makeDj({
+    llm: makeLlm({ chunks: [{ type: 'finish', reason: { kind: 'aborted', failure: { message: 'stopped' } } }] }),
+    model: { provider: 'opencode-go', model: 'm' },
+  });
+  try {
+    await harness.dj.plan({ count: 1 });
+    assert.match(harness.dj.modelError, /ABORTED: stopped/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a finish with no descriptor at all still reports something truthful', async () => {
+  const harness = makeDj({
+    llm: makeLlm({ chunks: [{ type: 'finish', reason: { kind: 'error' } }] }),
+    model: { provider: 'opencode-go', model: 'm' },
+  });
+  try {
+    await harness.dj.plan({ count: 1 });
+    assert.match(harness.dj.modelError, /UNKNOWN: stream error/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the legacy top-level failure shape still parses', async () => {
+  const harness = makeDj({
+    llm: makeLlm({ chunks: [{ type: 'finish', reason: { kind: 'error' }, failure: { code: 'RATE_LIMIT', message: 'slow down' } }] }),
+    model: { provider: 'opencode-go', model: 'm' },
+  });
+  try {
+    await harness.dj.plan({ count: 1 });
+    assert.match(harness.dj.modelError, /RATE_LIMIT: slow down/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('failure details are carried through when present', async () => {
+  const harness = makeDj({
+    llm: makeLlm({
+      chunks: [
+        { type: 'finish', reason: { kind: 'error', failure: { code: 'NO_ADAPTER', message: 'none', details: { provider: 'nope' } } } },
+      ],
+    }),
+    model: { provider: 'nope', model: 'm' },
+  });
+  try {
+    await harness.dj.plan({ count: 1 });
+    assert.match(harness.dj.modelError, /NO_ADAPTER: none/);
+    assert.match(harness.dj.modelError, /provider.*nope/, 'the details are the part that names what to fix');
   } finally {
     harness.cleanup();
   }
