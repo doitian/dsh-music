@@ -753,6 +753,9 @@ function applyQueueAction(state, { action, index, keepCurrent } = {}) {
 async function bootPanel(options = {}) {
   const state = options.state ?? stateDocument();
   const lyricsById = options.lyricsById ?? {};
+  const infoById = options.infoById ?? {};
+  // No model by default: every introduction comes back empty.
+  const introById = options.introById ?? {};
   const stored = new Map(Object.entries(options.storage ?? {}));
   const requests = [];
   const calls = [];
@@ -779,7 +782,7 @@ async function bootPanel(options = {}) {
     },
     addEventListener() {},
   };
-  // The page remembers the lyrics pane's collapse state here.
+  // The page remembers which pane the info card shows here.
   const localStorage = {
     getItem: (key) => (stored.has(key) ? stored.get(key) : null),
     setItem: (key, value) => { stored.set(key, String(value)); },
@@ -788,12 +791,18 @@ async function bootPanel(options = {}) {
   const fetch = async (url, init) => {
     const path = String(url).replace(/^.*\/api/, '');
     requests.push(path);
-    calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
+    // An introduction is fetched in the background after a render, so keeping
+    // it out of `calls` leaves `calls.at(-1)` naming what a click sent.
+    if (!path.startsWith('/intro/')) calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
     const custom = options.handle ? await options.handle(path) : null;
     if (custom) return custom;
     let body = {};
     // Every mutating route answers with the fresh snapshot, as the host does.
     if (path === '/state' || path === '/control' || path === '/report') body = state;
+    else if (path.startsWith('/intro/')) {
+      const id = Number(path.slice('/intro/'.length).split('?')[0]);
+      body = introById[id] ?? { text: '', reason: 'no model route is available' };
+    }
     else if (path === '/queue') {
       applyQueueAction(state, calls.at(-1).body);
       body = state;
@@ -810,7 +819,10 @@ async function bootPanel(options = {}) {
       body = state;
     } else if (path === '/dj/models') body = { routes: [], selected: {}, configured: {}, source: 'auto' };
     else if (path === '/quality') body = { levels: [] };
-    else if (path.startsWith('/lyric/')) {
+    else if (path.startsWith('/info/')) {
+      const id = Number(path.slice('/info/'.length));
+      body = infoById[id] ?? songInfo({ id });
+    } else if (path.startsWith('/lyric/')) {
       const id = Number(path.slice('/lyric/'.length));
       body = {
         lrc: lyricsById[id] ?? '[00:01.00]first line\n[00:05.00]second line',
@@ -839,11 +851,15 @@ async function bootPanel(options = {}) {
   await settle();
 
   const lyricRequests = () => requests.filter((path) => path.startsWith('/lyric/'));
+  const infoRequests = () => requests.filter((path) => path.startsWith('/info/'));
+  const introRequests = () => requests.filter((path) => path.startsWith('/intro/'));
   return {
     state,
     requests,
     calls,
     lyricRequests,
+    infoRequests,
+    introRequests,
     storage: stored,
     element: (id) => document.getElementById(id),
     /** Run the page's 1.5 s poll once, the way the browser would. */
@@ -854,24 +870,196 @@ async function bootPanel(options = {}) {
   };
 }
 
+/** What the host's `/info/:id` answers, filled for 晴天 unless overridden. */
+function songInfo(overrides = {}) {
+  return {
+    id: 123,
+    name: '晴天',
+    alias: [],
+    publishTime: 1059580800000,
+    album: {
+      id: 18905,
+      name: '叶惠美',
+      type: '专辑',
+      subType: '录音室版',
+      company: '杰威尔',
+      publishTime: 1059580800000,
+      size: 11,
+      intro: 'The fourth album.',
+    },
+    artists: [{ id: 6452, name: '周杰伦', intro: 'A singer-songwriter from Taiwan.\n\n　　Debuted in 2000.' }],
+    genres: ['流行-华语流行'],
+    tags: ['思念', '浪漫'],
+    language: '国语',
+    bpm: 69,
+    awards: ['第2届hito流行音乐奖'],
+    featuredIn: [],
+    review: { text: 'A song about a rainy day.', by: '某人' },
+    ...overrides,
+  };
+}
+
+const LYRICS_SHOWN = { 'dsh-music.info.view': 'lyrics' };
+
+test('the info card opens on the details, and fetches only them', async () => {
+  const panel = await bootPanel();
+  assert.equal(panel.element('tab-details').classList.contains('on'), true);
+  assert.equal(panel.element('details').hidden, false);
+  assert.equal(panel.element('lyrics').hidden, true);
+  assert.deepEqual(panel.infoRequests(), ['/info/123']);
+  assert.deepEqual(panel.lyricRequests(), [], 'hidden lyrics are not fetched');
+});
+
+test('the details show the album, genre, tags and the prose about the song and its artists', async () => {
+  const panel = await bootPanel();
+  await panel.poll();
+  const html = panel.element('details').innerHTML;
+  assert.match(html, /<dt>Album<\/dt><dd>叶惠美 <span class="muted">· 录音室版 · 2003-07-31 · 杰威尔 · 11 tracks<\/span>/, 'a NetEase date is a day in China');
+  assert.match(html, /<dt>Genre<\/dt><dd><span class="chips"><span class="chip genre">华语流行<\/span>/, 'a genre is named by its leaf');
+  assert.match(html, /<span class="chip ">思念<\/span><span class="chip ">浪漫<\/span>/);
+  assert.match(html, /<dt>Language<\/dt><dd>国语 · 69 BPM<\/dd>/);
+  assert.match(html, /<h4>About the song<\/h4><div class="prose"[^>]*><p>A song about a rainy day\.<\/p><\/div><div class="by">Review by 某人<\/div>/);
+  assert.match(html, /<h4>周杰伦<\/h4><div class="prose"[^>]*><p>A singer-songwriter from Taiwan\.<\/p><p>Debuted in 2000\.<\/p><\/div>/, 'each line is its own paragraph');
+  assert.match(html, /<h4>About the album<\/h4><div class="prose"[^>]*><p>The fourth album\.<\/p><\/div>/);
+  assert.doesNotMatch(html, /Featured in/, 'an empty fact is left out');
+});
+
+test('a song NetEase knows nothing more about says so', async () => {
+  const bare = songInfo({
+    album: {},
+    artists: [{ id: 1, name: 'Nobody', intro: '' }],
+    genres: [],
+    tags: [],
+    language: '',
+    bpm: null,
+    awards: [],
+    review: null,
+  });
+  const panel = await bootPanel({ infoById: { 123: bare } });
+  await panel.poll();
+  assert.match(panel.element('details').innerHTML, /No details for this song/);
+});
+
+test('NetEase text is escaped, never markup', async () => {
+  const panel = await bootPanel({ infoById: { 123: songInfo({ tags: ['<img src=x onerror=alert(1)>'] }) } });
+  assert.doesNotMatch(panel.element('details').innerHTML, /<img/);
+});
+
+test('the introduction is asked for only after the details land, and leads once written', async () => {
+  const panel = await bootPanel({ introById: { 123: { text: 'A rainy-day song.\n\nBy a singer from Taiwan.' } } });
+  assert.deepEqual(panel.introRequests(), [], 'nothing waits on the model before the facts are shown');
+  assert.match(panel.element('details').innerHTML, /<dt>Album<\/dt>/);
+  assert.match(panel.element('details').innerHTML, /Writing an introduction…/);
+  assert.doesNotMatch(panel.element('details').innerHTML, /<h4>周杰伦<\/h4>/, 'NetEase prose waits behind a click');
+
+  await panel.poll();
+  assert.deepEqual(panel.introRequests(), ['/intro/123?lang=en']);
+  const html = panel.element('details').innerHTML;
+  assert.match(html, /<h4>Introduction<span class="badge">AI<\/span><\/h4><div class="written"[^>]*><p>A rainy-day song\.<\/p><p>By a singer from Taiwan\.<\/p><\/div>/);
+  assert.match(html, /data-source="netease">Show what NetEase says<\/button>/);
+
+  await panel.poll();
+  assert.deepEqual(panel.introRequests(), ['/intro/123?lang=en'], 'one request per track and language');
+});
+
+test('a click on the introduction shows what NetEase says, and the switch goes back', async () => {
+  const panel = await bootPanel({ introById: { 123: { text: 'Written.' } } });
+  await panel.poll();
+  const details = panel.element('details');
+  const click = (selector, data) => details.onclick({ target: { closest: (asked) => (asked === selector ? data : null) } });
+
+  click('.written', {});
+  assert.match(details.innerHTML, /<h4>周杰伦<\/h4>/);
+  assert.doesNotMatch(details.innerHTML, /Written\./);
+  assert.match(details.innerHTML, /data-source="ai">Show the AI introduction<\/button>/);
+
+  click('[data-source]', { dataset: { source: 'ai' } });
+  assert.match(details.innerHTML, /Written\./);
+  assert.doesNotMatch(details.innerHTML, /<h4>周杰伦<\/h4>/);
+});
+
+test('without a model, NetEase prose shows, and the next track does not wait on one', async () => {
+  const panel = await bootPanel();
+  await panel.poll();
+  assert.match(panel.element('details').innerHTML, /<h4>周杰伦<\/h4>/);
+  assert.doesNotMatch(panel.element('details').innerHTML, /Writing an introduction|data-source/);
+
+  panel.state.current = { ...panel.state.current, id: 456, name: 'Two' };
+  await panel.poll();
+  assert.match(panel.element('details').innerHTML, /<h4>周杰伦<\/h4>/, 'shown while the next answer is awaited');
+});
+
+test('hidden details ask for no introduction', async () => {
+  const panel = await bootPanel({ storage: LYRICS_SHOWN });
+  await panel.poll();
+  await panel.poll();
+  assert.deepEqual(panel.introRequests(), []);
+});
+
+test('details are fetched once per track, and again for the next one', async () => {
+  const panel = await bootPanel({ infoById: { 456: songInfo({ id: 456, album: { name: 'Second album' } }) } });
+  await panel.poll();
+  assert.deepEqual(panel.infoRequests(), ['/info/123'], 'a repeated poll must not refetch');
+
+  panel.state.current = { ...panel.state.current, id: 456, name: 'Two' };
+  await panel.poll();
+  assert.deepEqual(panel.infoRequests(), ['/info/123', '/info/456']);
+  assert.match(panel.element('details').innerHTML, /Second album/);
+});
+
+test('only the shown pane follows the track; the other catches up when shown', async () => {
+  const panel = await bootPanel();
+  panel.element('tab-lyrics').onclick();
+  await settle();
+  assert.equal(panel.element('details').hidden, true);
+  assert.equal(panel.element('lyrics').hidden, false);
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/123'], 'the lyrics load when first shown');
+  assert.equal(panel.storage.get('dsh-music.info.view'), 'lyrics', 'the choice is remembered');
+
+  panel.state.current = { ...panel.state.current, id: 456, name: 'Two' };
+  await panel.poll();
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456']);
+  assert.deepEqual(panel.infoRequests(), ['/info/123'], 'hidden details do not follow the track');
+
+  panel.element('tab-details').onclick();
+  await settle();
+  assert.deepEqual(panel.infoRequests(), ['/info/123', '/info/456'], 'shown again, they catch up');
+
+  panel.element('tab-lyrics').onclick();
+  await settle();
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456'], 'lyrics still current are not refetched');
+});
+
+test('switching back to a track already seen reuses its details', async () => {
+  const panel = await bootPanel();
+  panel.state.current = { ...panel.state.current, id: 456, name: 'Two' };
+  await panel.poll();
+  panel.state.current = { ...panel.state.current, id: 123, name: 'One' };
+  await panel.poll();
+  assert.deepEqual(panel.infoRequests(), ['/info/123', '/info/456']);
+  assert.match(panel.element('details').innerHTML, /叶惠美/);
+});
+
 test('the page fetches the lyrics for the track it renders, engine or not', async () => {
   // Lyrics used to be requested only from the local fallback transport's
   // `applySource`, which never runs while the shell engine owns the audio
   // element — so the pane sat on "—" through every track.
-  const panel = await bootPanel();
+  const panel = await bootPanel({ storage: LYRICS_SHOWN });
+  assert.equal(panel.element('tab-lyrics').classList.contains('on'), true, 'a remembered choice is applied');
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123'], 'the rendered track must be asked for');
   assert.match(panel.element('lyrics').innerHTML, /first line/, 'and the lines must reach the pane');
+  assert.deepEqual(panel.infoRequests(), [], 'hidden details are not fetched');
 });
 
 test('lyrics are fetched once per track, not once per poll', async () => {
-  const panel = await bootPanel();
+  const panel = await bootPanel({ storage: LYRICS_SHOWN });
   await panel.poll();
   await panel.poll();
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123'], 'a repeated poll must not refetch');
 });
 
-test('a track change refetches and replaces the pane', async () => {
-  const panel = await bootPanel({ lyricsById: { 456: '[00:01.00]the next track' } });
+test('a track change refetches and replaces the lyrics', async () => {
+  const panel = await bootPanel({ storage: LYRICS_SHOWN, lyricsById: { 456: '[00:01.00]the next track' } });
   assert.match(panel.element('lyrics').innerHTML, /first line/);
 
   panel.state.current = { ...panel.state.current, id: 456, name: 'Two' };
@@ -880,35 +1068,6 @@ test('a track change refetches and replaces the pane', async () => {
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456']);
   assert.match(panel.element('lyrics').innerHTML, /the next track/);
   assert.doesNotMatch(panel.element('lyrics').innerHTML, /first line/);
-});
-
-test('the lyrics pane collapses to its header on demand, and the choice sticks', async () => {
-  const panel = await bootPanel();
-  const pane = panel.element('lyrics');
-  const toggle = panel.element('lyrics-toggle');
-  assert.equal(pane.classList.contains('collapsed'), false, 'open by default');
-  assert.equal(toggle.textContent, 'Hide');
-
-  toggle.onclick();
-  assert.equal(pane.classList.contains('collapsed'), true, 'the click collapses the pane');
-  assert.equal(toggle.textContent, 'Show', 'and the button offers the way back');
-  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-  assert.equal(panel.storage.get('dsh-music.lyrics.collapsed'), '1', 'the choice is remembered');
-
-  toggle.onclick();
-  assert.equal(pane.classList.contains('collapsed'), false);
-  assert.equal(toggle.textContent, 'Hide');
-  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-  assert.equal(panel.storage.get('dsh-music.lyrics.collapsed'), '0');
-});
-
-test('a remembered collapse is applied when the page loads', async () => {
-  const panel = await bootPanel({ storage: { 'dsh-music.lyrics.collapsed': '1' } });
-  assert.equal(panel.element('lyrics').classList.contains('collapsed'), true);
-  assert.equal(panel.element('lyrics-toggle').textContent, 'Show');
-  // The lines are still fetched while hidden, so expanding is instant.
-  assert.deepEqual(panel.lyricRequests(), ['/lyric/123']);
-  assert.match(panel.element('lyrics').innerHTML, /first line/);
 });
 
 // ----------------------------------------------------------------- the hearts

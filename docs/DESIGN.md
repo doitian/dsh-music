@@ -650,6 +650,27 @@ Five design notes:
 - **The host owns the desired state; the engine owns the audio element.** They
   reconcile through `rev` / `transportRev` counters, so agent tools, the page,
   and the DJ all drive one state machine instead of three.
+- **Details and lyrics share one card, and only the one shown is kept
+  current.** `GET /music/api/info/<id>` gathers the song detail, its album
+  page, the music wiki (音乐百科: genre, tags, language, BPM, awards, where it
+  was featured, a review) and the first three artists' introductions, each
+  part fetched on its own so one that fails leaves the others. The host caches
+  an answer for six hours, and the page keeps the ones it has seen. The page
+  fetches and paints only the visible pane: a hidden pane is not fetched on a
+  track change, and the lyrics are not highlighted while hidden, so switching
+  to a pane is what brings it up to the track.
+- **The introduction is written by the model, and loaded last.**
+  `GET /music/api/intro/<id>?lang=en|zh` hands the details above to the DJ's
+  model route — one leaf call under the DJ's identity — asking for two or
+  three short paragraphs grounded in NetEase's material, in the panel's
+  language. The page asks for it only on the poll after the details have
+  painted, and only for the track the visible pane shows, so neither
+  playback nor the NetEase facts wait on a model call. A written introduction
+  is cached for a week per track and language; with no model, or a failed
+  call, the route answers an empty `text` (never an error), nothing is
+  cached, and the page shows NetEase's own prose — straight away on the next
+  track too, rather than a "writing" line that will come to nothing. A click
+  on the written introduction, or its switch, shows NetEase's prose instead.
 - **The page carries its own icons.** DSH shares no icon set with plugins:
   the shell's frozen module table holds React, Cordis and its UI packages
   (`dsh-client-store`, `-ui-slots`, `-ui-primitives`, `-ui-dockkit`), and the
@@ -807,9 +828,9 @@ where the page must fetch everything it renders on its own: lyrics used to be
 requested only from the local fallback transport's `applySource`, so with the
 engine playing the pane stayed empty for every track. Three tests hold the
 line: the rendered track is asked for, one fetch per track rather than one per
-poll, and a track change replaces the pane. Two more cover the pane's shape: it
-is capped to a few lines, collapses to its header on demand, and remembers that
-choice across loads — while still fetching the lines, so expanding is instant.
+poll, and a track change replaces the pane. The details pane, shown by default,
+holds the same line, and the tests also check that a hidden pane is neither
+fetched nor kept current until it is shown again.
 
 `npm test` runs the six deterministic files in sequence (`npm run test:all`
 adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which

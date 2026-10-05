@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { CookieJar, LEVELS, Netease, isLevel, normalizeTrack, resizeImage } from '../lib/netease.js';
+import { CookieJar, LEVELS, Netease, cleanText, isLevel, normalizeTrack, parseSongWiki, resizeImage } from '../lib/netease.js';
 import { SessionStore, TASTE_LEVELS } from '../lib/session.js';
 import { Player } from '../lib/state.js';
 
@@ -130,6 +130,86 @@ const serveAt = (levels) => (level) => {
     ],
   };
 };
+
+// ------------------------------------------------------------- song details
+
+/** A music-wiki answer in the shape NetEase sends: facts are creatives of the basic block. */
+function wikiAnswer() {
+  const titled = (title) => ({ uiElement: { mainTitle: { title } } });
+  const linked = (text) => ({ uiElement: { textLinks: [{ text }] } });
+  return {
+    code: 200,
+    data: {
+      blocks: [
+        { code: 'SONG_PLAY_ABOUT_MUSIC_MEMORY', creatives: [{ creativeType: 'songTag', resources: [titled('not this')] }] },
+        {
+          code: 'SONG_PLAY_ABOUT_SONG_BASIC',
+          creatives: [
+            { creativeType: 'songTag', resources: [titled('原声带-动画片原声'), titled('流行-华语流行')] },
+            { creativeType: 'songBizTag', resources: [titled('热血励志'), titled('自信')] },
+            { creativeType: 'language', ...linked('国语') },
+            { creativeType: 'bpm', ...linked('64') },
+            { creativeType: 'songAward', resources: [titled('第30届东方风云榜')] },
+            { creativeType: 'entertainment', resources: [titled('动画《双城之战》主题曲')] },
+            { creativeType: 'sheet', resources: [{ uiElement: {} }] },
+            {
+              creativeType: 'songComment',
+              resources: [{ uiElement: { mainTitle: { title: '乐评来自 神经蛙' }, descriptions: [{ description: '一首主题曲。[3]' }] } }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+test('the music wiki yields the song facts, from its basic block only', () => {
+  assert.deepEqual(parseSongWiki(wikiAnswer()), {
+    genres: ['原声带-动画片原声', '流行-华语流行'],
+    tags: ['热血励志', '自信'],
+    language: '国语',
+    bpm: 64,
+    awards: ['第30届东方风云榜'],
+    featuredIn: ['动画《双城之战》主题曲'],
+    review: { text: '一首主题曲。', by: '神经蛙' },
+  });
+  assert.deepEqual(parseSongWiki(null).genres, [], 'no wiki is no facts, not a failure');
+});
+
+test('encyclopedia prose loses its citation marks and ragged gaps', () => {
+  assert.equal(cleanText('出生于台湾 [38]。获奖[1-2]\n\n\n\n其后'), '出生于台湾。获奖\n\n其后');
+  assert.equal(cleanText(undefined), '');
+});
+
+test('songInfo keeps the song when its album, wiki or artist cannot be read', async () => {
+  const api = new Netease();
+  api.call = async (endpoint) => {
+    if (endpoint === '/api/song/detail') {
+      return {
+        songs: [
+          {
+            id: 7,
+            name: 'Song',
+            alias: ['Alias'],
+            album: { id: 70, name: 'Album', company: 'Label', publishTime: 1 },
+            artists: [{ id: 700, name: 'Singer' }, { id: 701, name: 'Other' }],
+          },
+        ],
+      };
+    }
+    if (endpoint === '/api/artist/introduction') return { briefDesc: 'Born somewhere. [2]' };
+    throw new Error('offline');
+  };
+  const info = await api.songInfo(7);
+  assert.equal(info.album.name, 'Album', 'the song detail names the album when its own page fails');
+  assert.equal(info.album.company, 'Label');
+  assert.deepEqual(info.alias, ['Alias']);
+  assert.deepEqual(info.artists.map((artist) => artist.intro), ['Born somewhere.', 'Born somewhere.']);
+  assert.deepEqual(info.genres, []);
+
+  api.call = async () => ({ code: 200, songs: [] });
+  await assert.rejects(api.songInfo(8), /not found/);
+});
 
 test('songUrl asks for the chosen level on the v1 endpoint', async () => {
   const { api, attempts } = scriptedClient(serveAt(['lossless']));

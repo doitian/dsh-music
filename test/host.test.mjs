@@ -1117,6 +1117,13 @@ test('search resolves real tracks and returns them to the panel', { skip: OFFLIN
     assert.equal(lyric.status, 200);
     assert.equal(typeof lyric.body.lrc, 'string');
 
+    const info = await app.json(`/music/api/info/${track.id}`);
+    assert.equal(info.status, 200);
+    assert.equal(info.body.id, track.id);
+    assert.ok(info.body.album.name, 'a real song has an album');
+    assert.ok(Array.isArray(info.body.genres));
+    assert.equal((await app.json('/music/api/info/abc')).status, 400);
+
     const charts = await app.json('/music/api/charts');
     assert.equal(charts.status, 200);
     assert.ok(charts.body.length >= 3);
@@ -1159,6 +1166,35 @@ test('audio streams through the proxy with Range support', { skip: OFFLINE }, as
     assert.match(reason.error, /unavailable/);
   } finally {
     await app.close();
+  }
+});
+
+test('an introduction is written once per track and language, and its absence is not an error', { skip: OFFLINE }, async () => {
+  const llm = makeFakeLlm({ reply: 'A song about a sunny day.' });
+  const app = await mount({ llm, config: { dj: { provider: 'opencode-go', model: 'deepseek-v4-flash' } } });
+  try {
+    const first = await app.json('/music/api/intro/186016?lang=zh');
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.body, { text: 'A song about a sunny day.', route: 'opencode-go/deepseek-v4-flash' });
+    assert.match(llm.calls[0].messages[0].content[1].text, /Song: 晴天/, 'written from the details NetEase holds');
+
+    await app.json('/music/api/intro/186016?lang=zh');
+    assert.equal(llm.calls.length, 1, 'a written introduction is cached');
+    await app.json('/music/api/intro/186016');
+    assert.equal(llm.calls.length, 2, 'per language');
+    assert.equal((await app.json('/music/api/intro/abc')).status, 400);
+  } finally {
+    await app.close();
+  }
+
+  const bare = await mount();
+  try {
+    const none = await bare.json('/music/api/intro/186016');
+    assert.equal(none.status, 200);
+    assert.equal(none.body.text, '');
+    assert.match(none.body.reason, /no model route/);
+  } finally {
+    await bare.close();
   }
 });
 

@@ -82,9 +82,9 @@
         .side { overflow: hidden; border-left: 1px solid var(--line); }
         .side .queue-card { flex: 1; min-height: 0; }
         .side #queue { overflow: auto; }
-        /* With a column of its own, the lyrics fill what the stage leaves. */
-        .stage .lyrics-card { flex: 1; min-height: 160px; }
-        .stage .lyrics { flex: 1; max-height: none; }
+        /* With a column of its own, the details or lyrics fill what the stage leaves. */
+        .stage .info-card { flex: 1; min-height: 160px; }
+        .stage .lyrics, .stage .details { flex: 1; max-height: none; }
       }
 
       .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
@@ -147,7 +147,15 @@
       #mute:hover:not(:disabled) { color: var(--fg); }
       #volume { flex: 0 0 96px; }
 
-      .lyrics-card { display: flex; flex-direction: column; min-height: 0; }
+      .info-card { display: flex; flex-direction: column; min-height: 0; }
+      .tabs { display: flex; gap: 14px; }
+      .tab {
+        background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 0 0 2px;
+        color: var(--muted); font: inherit; text-transform: inherit; letter-spacing: inherit;
+      }
+      .tab:hover:not(:disabled) { background: none; color: var(--fg); }
+      .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
+      .lyrics[hidden], .details[hidden] { display: none; }
       /* The pane is a glance at the current line, not a page: a few lines of
          synced text, scrolled for the rest. `--lyrics-lines` is the single knob. */
       .lyrics {
@@ -156,9 +164,43 @@
         overflow: auto; padding: 2px 12px 14px; font-size: 14px; line-height: 1.6; scrollbar-width: none;
       }
       .lyrics::-webkit-scrollbar { display: none; }
-      .lyrics.collapsed { display: none; }
       .lyrics p { margin: 0; padding: 2px 0; color: var(--faint); transition: color 0.15s; }
       .lyrics p.on { color: var(--fg); font-weight: 600; }
+
+      /* The song's facts first, then prose about the song, its artists and its
+         album, each clamped to a few lines until clicked. */
+      .details {
+        max-height: 320px; overflow: auto; padding: 2px 12px 14px;
+        display: flex; flex-direction: column; gap: 12px;
+      }
+      .details .alias { color: var(--muted); margin: 0; }
+      .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 0; }
+      .facts dt { color: var(--muted); }
+      .facts dd { margin: 0; overflow-wrap: anywhere; }
+      .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+      .chip { padding: 0 8px; border-radius: 999px; background: var(--hover); font-size: 12px; }
+      .chip.genre { background: var(--accent-soft); }
+      .about h4 {
+        margin: 0 0 3px; color: var(--muted); font-size: 11px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.6px;
+      }
+      .about .prose {
+        cursor: pointer;
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
+      }
+      .about .prose.open { display: block; }
+      .about .prose p { margin: 0; }
+      .about .prose p + p { margin-top: 8px; }
+      .about .by { color: var(--muted); font-size: 12px; margin-top: 2px; }
+      .about .badge {
+        margin-left: 6px; padding: 0 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
+        font-size: 10px; letter-spacing: 0.4px;
+      }
+      .about .written { cursor: pointer; }
+      .about .written p { margin: 0; }
+      .about .written p + p { margin-top: 8px; }
+      .about .writing { color: var(--muted); margin: 0; }
+      .details .source { align-self: flex-start; font-size: 12px; }
 
       .need-gesture {
         background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
@@ -258,7 +300,7 @@
       dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
       #qr { display: block; margin: 12px auto; width: 220px; height: 220px; image-rendering: pixelated; border-radius: 8px; background: #fff; padding: 8px; }
       .hint { color: var(--muted); font-size: 12px; text-align: center; }
-      .lyrics .hint { text-align: left; }
+      .lyrics .hint, .details .hint { text-align: left; margin: 0; }
       .row-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 14px; }
     </style>
   </head>
@@ -313,15 +355,15 @@
             <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
           </div>
 
-          <div class="card lyrics-card">
+          <div class="card info-card">
             <div class="card-head">
-              <span data-i18n="lyrics">Lyrics</span>
-              <span class="grow"></span>
-              <!-- Label and title are state-dependent, so the script owns them
-                   (applyStaticStrings cannot know which way the pane is now). -->
-              <button id="lyrics-toggle" class="link" type="button" aria-expanded="true">Hide</button>
+              <div class="tabs" role="tablist">
+                <button id="tab-details" class="tab" type="button" role="tab" data-i18n="details">Details</button>
+                <button id="tab-lyrics" class="tab" type="button" role="tab" data-i18n="lyrics">Lyrics</button>
+              </div>
             </div>
-            <div class="lyrics" id="lyrics"><p class="hint">—</p></div>
+            <div class="details" id="details" role="tabpanel"><p class="hint">—</p></div>
+            <div class="lyrics" id="lyrics" role="tabpanel" hidden><p class="hint">—</p></div>
           </div>
         </section>
 
@@ -427,10 +469,24 @@
           likeNeedsSignIn: '登录后才能在网易云标记喜欢',
           mute: '静音',
           lyrics: '歌词',
-          lyricsHide: '收起',
-          lyricsShow: '展开',
-          lyricsToggleHide: '收起歌词面板',
-          lyricsToggleShow: '展开歌词面板',
+          details: '详情',
+          noDetails: '暂无这首歌的信息',
+          album: '专辑',
+          albumTracks: '{n} 首',
+          genre: '曲风',
+          tags: '标签',
+          language: '语种',
+          featuredIn: '影视节目',
+          awards: '获奖',
+          aboutSong: '关于这首歌',
+          aboutAlbum: '关于专辑',
+          reviewBy: '乐评来自 {name}',
+          intro: '简介',
+          introWriting: '正在撰写简介…',
+          introFromNetease: '查看网易云音乐的介绍',
+          introFromAi: '查看 AI 简介',
+          introToNetease: '点击查看网易云音乐的介绍',
+          expand: '点击展开或收起',
           queue: '播放队列',
           djModel: 'AI DJ 模型',
           djModelToggleShow: '展开模型设置',
@@ -531,10 +587,24 @@
           likeNeedsSignIn: 'Sign in to NetEase to like tracks',
           mute: 'Mute',
           lyrics: 'Lyrics',
-          lyricsHide: 'Hide',
-          lyricsShow: 'Show',
-          lyricsToggleHide: 'Collapse the lyrics pane',
-          lyricsToggleShow: 'Expand the lyrics pane',
+          details: 'Details',
+          noDetails: 'No details for this song',
+          album: 'Album',
+          albumTracks: '{n} tracks',
+          genre: 'Genre',
+          tags: 'Tags',
+          language: 'Language',
+          featuredIn: 'Featured in',
+          awards: 'Awards',
+          aboutSong: 'About the song',
+          aboutAlbum: 'About the album',
+          reviewBy: 'Review by {name}',
+          intro: 'Introduction',
+          introWriting: 'Writing an introduction…',
+          introFromNetease: 'Show what NetEase says',
+          introFromAi: 'Show the AI introduction',
+          introToNetease: 'Click to show what NetEase says',
+          expand: 'Click to expand or collapse',
           queue: 'Queue',
           djModel: 'DJ model',
           djModelToggleShow: 'Show the model settings',
@@ -711,10 +781,11 @@
           document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
         } catch { /* headless */ }
         applyStaticStrings();
-        // The toggles' labels and titles depend on the collapse state, not on a
-        // fixed key, so they are painted rather than carried as data-i18n.
-        paintLyricsToggle();
+        // The model toggle's label depends on its fold, not on a fixed key, so
+        // it is painted rather than carried as data-i18n.
         paintDjModelToggle();
+        // The details carry translated labels around NetEase's own text.
+        if (infoView === 'details') repaintDetails();
         // The gesture hint carries markup; drop it so render() rebuilds it in
         // the new language.
         $('gesture')?.remove();
@@ -746,9 +817,23 @@
       let lyricTrackId = null;
       /** Bumped per request so a slow reply for a skipped track is discarded. */
       let lyricRequest = 0;
-      /** Local-storage key for whether the lyrics pane is collapsed. */
-      const LYRICS_PREF = 'dsh-music.lyrics.collapsed';
-      let lyricsCollapsed = readLyricsPref();
+      /** Local-storage key for which pane the info card shows: `details` or `lyrics`. */
+      const INFO_VIEW_PREF = 'dsh-music.info.view';
+      let infoView = readInfoViewPref();
+      /** Track whose details belong in the pane, as `lyricTrackId` is for lyrics. */
+      let detailsTrackId = null;
+      let detailsRequest = 0;
+      /** Details already fetched, by track id, so switching back is instant. */
+      const detailsCache = new Map();
+      /**
+       * Model-written introductions by `<track id>:<language>`: `'pending'`
+       * while one is being written, then `{text}`, empty when none could be.
+       */
+      const intros = new Map();
+      /** Whether the last introduction came back empty, so the next track shows NetEase's prose while it waits. */
+      let introsUnavailable = false;
+      /** Which introduction the details show: `ai`, or NetEase's own (`netease`). Back to `ai` per track. */
+      let introSource = 'ai';
       /** Local-storage key for whether the DJ model form is unfolded. */
       const DJ_MODEL_PREF = 'dsh-music.djmodel.expanded';
       let djModelExpanded = readDjModelPref();
@@ -1059,21 +1144,13 @@
         $('np-title').textContent = track ? track.name : t('nothingPlaying');
         $('np-artists').textContent = track ? (track.artists || []).join(' / ') : '';
         $('np-album').textContent = track ? track.album || '' : '';
-        // Lyrics belong to the track, and this page fetches them itself on
-        // every poll — not from the local transport's `applySource`, which
-        // only ever runs when this page owns the audio element. In the normal
-        // case the shell engine plays, so that path is dead and the pane
-        // stayed empty forever.
-        const trackId = track?.id ?? null;
-        if (trackId !== lyricTrackId) {
-          lyricTrackId = trackId;
-          if (trackId) loadLyrics(trackId);
-          else {
-            lyric = null;
-            lyricLine = -1;
-            $('lyrics').innerHTML = '<p class="hint">—</p>';
-          }
-        }
+        // Details and lyrics belong to the track, and this page fetches them
+        // itself on every poll — not from the local transport's `applySource`,
+        // which only ever runs when this page owns the audio element. In the
+        // normal case the shell engine plays, so that path is dead and the
+        // pane stayed empty forever.
+        syncInfo(track?.id ?? null);
+        loadIntro();
         setIcon($('play'), state.playing ? 'pause' : 'play', { filled: true });
         $('mode').textContent = { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList');
         $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
@@ -1310,37 +1387,211 @@
         $('t-dur').textContent = fmt(duration);
       }
 
-      // ---------------------------------------------------------------- lyrics
-      /** Collapsed preference, remembered across reloads when storage is open. */
-      function readLyricsPref() {
-        try { return localStorage.getItem(LYRICS_PREF) === '1'; } catch { return false; }
+      // ------------------------------------------------------ details + lyrics
+      /** The pane shown, remembered across reloads when storage is open; details by default. */
+      function readInfoViewPref() {
+        try { return localStorage.getItem(INFO_VIEW_PREF) === 'lyrics' ? 'lyrics' : 'details'; } catch { return 'details'; }
       }
 
-      function saveLyricsPref(collapsed) {
-        try { localStorage.setItem(LYRICS_PREF, collapsed ? '1' : '0'); } catch { /* storage denied */ }
+      function saveInfoViewPref(view) {
+        try { localStorage.setItem(INFO_VIEW_PREF, view); } catch { /* storage denied */ }
       }
 
-      /** Reflect `lyricsCollapsed` in the pane and in the header button. */
-      function paintLyricsToggle() {
-        $('lyrics').classList.toggle('collapsed', lyricsCollapsed);
-        const button = $('lyrics-toggle');
-        button.textContent = t(lyricsCollapsed ? 'lyricsShow' : 'lyricsHide');
-        button.title = t(lyricsCollapsed ? 'lyricsToggleShow' : 'lyricsToggleHide');
-        button.setAttribute('aria-expanded', lyricsCollapsed ? 'false' : 'true');
+      /** Reflect `infoView` in the tabs and the panes. */
+      function paintInfoTabs() {
+        for (const view of ['details', 'lyrics']) {
+          const on = infoView === view;
+          $('tab-' + view).classList.toggle('on', on);
+          $('tab-' + view).setAttribute('aria-selected', on ? 'true' : 'false');
+          $(view).hidden = !on;
+        }
       }
 
-      $('lyrics-toggle').onclick = () => {
-        lyricsCollapsed = !lyricsCollapsed;
-        saveLyricsPref(lyricsCollapsed);
-        paintLyricsToggle();
-        // A hidden pane has no scroll position to keep, so re-expanding puts
-        // the highlighted line back in view instead of waiting for the next
-        // line change to scroll there.
-        if (!lyricsCollapsed) {
+      /**
+       * Bring the visible pane up to the track. Only the visible one: a hidden
+       * pane is neither fetched nor painted, and catches up when it is shown.
+       */
+      function syncInfo(trackId) {
+        if (infoView === 'details') {
+          if (trackId === detailsTrackId) return;
+          detailsTrackId = trackId;
+          if (trackId) loadDetails(trackId);
+          else $('details').innerHTML = '<p class="hint">—</p>';
+          return;
+        }
+        if (trackId === lyricTrackId) return;
+        lyricTrackId = trackId;
+        if (trackId) loadLyrics(trackId);
+        else {
+          lyric = null;
+          lyricLine = -1;
+          $('lyrics').innerHTML = '<p class="hint">—</p>';
+        }
+      }
+
+      function showInfo(view) {
+        if (view === infoView) return;
+        infoView = view;
+        saveInfoViewPref(view);
+        paintInfoTabs();
+        syncInfo(state?.current?.id ?? null);
+        // A hidden pane kept no scroll position, so showing the lyrics puts the
+        // current line back in view instead of waiting for the next line.
+        if (view === 'lyrics') {
           lyricLine = -1;
           paintLyrics();
         }
+      }
+
+      $('tab-details').onclick = () => showInfo('details');
+      $('tab-lyrics').onclick = () => showInfo('lyrics');
+      paintInfoTabs();
+
+      // The introduction's switch, or the written one itself, swaps it with
+      // NetEase's prose; clamped prose opens in place.
+      $('details').onclick = (event) => {
+        const source = event.target.closest?.('[data-source]')?.dataset.source ?? (event.target.closest?.('.written') ? 'netease' : null);
+        if (source) {
+          introSource = source;
+          repaintDetails({ keepScroll: true });
+          return;
+        }
+        const prose = event.target.closest?.('.about .prose');
+        if (prose) prose.classList.toggle('open');
       };
+
+      async function loadDetails(id) {
+        const request = ++detailsRequest;
+        introSource = 'ai';
+        const cached = detailsCache.get(id);
+        if (cached) {
+          paintDetails(cached);
+          return;
+        }
+        $('details').innerHTML = `<p class="hint">${esc(t('loading'))}</p>`;
+        try {
+          const info = await api('/info/' + id);
+          detailsCache.set(id, info);
+          if (detailsCache.size > 30) detailsCache.delete(detailsCache.keys().next().value);
+          if (request !== detailsRequest) return;
+          paintDetails(info);
+        } catch (error) {
+          if (request !== detailsRequest) return;
+          $('details').innerHTML = `<p class="hint">${esc(error.message)}</p>`;
+        }
+      }
+
+      /** Paint the shown track's details again: a language switch, an introduction, the switch. */
+      function repaintDetails(options) {
+        const info = detailsCache.get(detailsTrackId);
+        if (info) paintDetails(info, options);
+      }
+
+      /**
+       * Ask for the shown track's introduction, once its details are painted.
+       *
+       * Lazy on purpose: a model call takes seconds, so it waits for the poll
+       * after the details land — playback and the NetEase facts never wait on
+       * it — and it is asked only for the track the visible pane shows.
+       */
+      async function loadIntro() {
+        if (infoView !== 'details' || !detailsTrackId || !detailsCache.has(detailsTrackId)) return;
+        const id = detailsTrackId;
+        const key = `${id}:${LANG}`;
+        if (intros.has(key)) return;
+        intros.set(key, 'pending');
+        if (intros.size > 60) intros.delete(intros.keys().next().value);
+        let text = '';
+        try {
+          const answer = await api(`/intro/${id}?lang=${LANG}`);
+          text = typeof answer?.text === 'string' ? answer.text : '';
+        } catch { /* NetEase's prose stands in */ }
+        intros.set(key, { text });
+        introsUnavailable = !text;
+        if (infoView === 'details' && detailsTrackId === id) repaintDetails({ keepScroll: true });
+      }
+
+      /** NetEase dates are midnight in China; read them there, as YYYY-MM-DD. */
+      function chinaDate(ms) {
+        try {
+          return new Date(ms).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+        } catch {
+          return new Date(ms).toISOString().slice(0, 10);
+        }
+      }
+
+      function paintDetails(info, { keepScroll = false } = {}) {
+        const facts = [];
+        const fact = (label, html) => facts.push(`<dt>${esc(t(label))}</dt><dd>${html}</dd>`);
+        const chips = (list, kind = '') =>
+          `<span class="chips">${list.map((item) => `<span class="chip ${kind}">${esc(item)}</span>`).join('')}</span>`;
+
+        const album = info.album ?? {};
+        if (album.name) {
+          const notes = [
+            album.subType || album.type,
+            album.publishTime ? chinaDate(album.publishTime) : '',
+            album.company,
+            album.size > 1 ? t('albumTracks', { n: album.size }) : '',
+          ].filter(Boolean);
+          fact('album', esc(album.name) + (notes.length ? ` <span class="muted">· ${esc(notes.join(' · '))}</span>` : ''));
+        }
+        // A genre is a path such as 流行-华语流行; its leaf names it.
+        if (info.genres?.length) fact('genre', chips(info.genres.map((genre) => genre.split('-').pop()), 'genre'));
+        if (info.tags?.length) fact('tags', chips(info.tags));
+        const spoken = [info.language, info.bpm ? `${info.bpm} BPM` : ''].filter(Boolean);
+        if (spoken.length) fact('language', esc(spoken.join(' · ')));
+        if (info.featuredIn?.length) fact('featuredIn', esc(info.featuredIn.join('；')));
+        if (info.awards?.length) fact('awards', esc(info.awards.join('；')));
+
+        const netease = [];
+        // NetEase separates paragraphs with a line break, often indented with
+        // full-width spaces; each becomes its own paragraph, spaced apart.
+        const paragraphs = (text) =>
+          String(text)
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => `<p>${esc(line)}</p>`)
+            .join('');
+        const section = (title, text, by = '') =>
+          netease.push(
+            `<section class="about"><h4>${esc(title)}</h4><div class="prose" title="${esc(t('expand'))}">${paragraphs(text)}</div>` +
+              (by ? `<div class="by">${esc(by)}</div>` : '') +
+              '</section>',
+          );
+        if (info.review?.text) section(t('aboutSong'), info.review.text, info.review.by ? t('reviewBy', { name: info.review.by }) : '');
+        for (const artist of info.artists ?? []) if (artist.intro) section(artist.name, artist.intro);
+        if (album.intro) section(t('aboutAlbum'), album.intro);
+
+        // The model's introduction leads; NetEase's prose is a click away. While
+        // it is written, NetEase's prose shows if the model was last unavailable.
+        const intro = intros.get(`${info.id}:${LANG}`);
+        const written = typeof intro === 'object' && intro.text ? intro.text : '';
+        const waiting = intro === undefined || intro === 'pending';
+        const head = `<h4>${esc(t('intro'))}<span class="badge">AI</span></h4>`;
+        const swap = (to, label) => `<button class="link source" type="button" data-source="${to}">${esc(t(label))}</button>`;
+        let about;
+        if (introSource === 'ai' && written) {
+          about =
+            `<section class="about">${head}<div class="written" title="${esc(t('introToNetease'))}">${paragraphs(written)}</div></section>` +
+            (netease.length ? swap('netease', 'introFromNetease') : '');
+        } else if (introSource === 'ai' && waiting && !introsUnavailable) {
+          about =
+            `<section class="about">${head}<p class="writing">${esc(t('introWriting'))}</p></section>` +
+            (netease.length ? swap('netease', 'introFromNetease') : '');
+        } else {
+          about = (written ? swap('ai', 'introFromAi') : '') + netease.join('');
+        }
+
+        const alias = info.alias?.length ? `<p class="alias">${esc(info.alias.join(' / '))}</p>` : '';
+        const scrolled = $('details').scrollTop;
+        $('details').innerHTML =
+          facts.length || about || alias
+            ? alias + (facts.length ? `<dl class="facts">${facts.join('')}</dl>` : '') + about
+            : `<p class="hint">${esc(t('noDetails'))}</p>`;
+        $('details').scrollTop = keepScroll ? scrolled : 0;
+      }
 
       async function loadLyrics(id) {
         const request = ++lyricRequest;
@@ -1376,7 +1627,7 @@
       }
 
       function paintLyrics() {
-        if (!lyric) return;
+        if (!lyric || infoView !== 'lyrics') return;
         const at = positionMs();
         let active = -1;
         for (let index = 0; index < lyric.length; index++) {

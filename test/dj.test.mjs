@@ -18,7 +18,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { Pacer } from '../lib/cache.js';
-import { AiDj, curationRequest, curationSessionId } from '../lib/dj.js';
+import { AiDj, curationRequest, curationSessionId, introMaterial } from '../lib/dj.js';
 import { Player } from '../lib/state.js';
 import { SessionStore } from '../lib/session.js';
 
@@ -1628,6 +1628,63 @@ test('a concurrent top-up cannot double-plan', async () => {
   } finally {
     harness.cleanup();
   }
+});
+
+// ----------------------------------------------------------- introductions
+
+/** A song's details, as `Netease#songInfo` returns them. */
+const SONG_INFO = {
+  id: 186016,
+  name: '晴天',
+  alias: [],
+  album: { name: '叶惠美', subType: '录音室版', company: '杰威尔', publishTime: 1059580800000, intro: 'x'.repeat(2000) },
+  artists: [{ id: 6452, name: '周杰伦', intro: 'Born in Taiwan.' }],
+  genres: ['流行-华语流行'],
+  tags: ['思念'],
+  language: '国语',
+  featuredIn: [],
+  awards: ['第2届hito流行音乐奖'],
+  review: null,
+};
+
+test('the introduction is written from NetEase\'s material, in the panel\'s language', async () => {
+  const llm = makeLlm({ reply: '## 晴天\n**晴天**是一首歌。\n\n\n\n来自台湾。' });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const intro = await harness.dj.introduce(SONG_INFO, { lang: 'zh' });
+    assert.deepEqual(intro, { text: '晴天是一首歌。\n\n来自台湾。', route: 'opencode-go/m' }, 'a heading and markdown are dropped');
+    const [instruction, material] = llm.calls[0].messages[0].content.map((block) => block.text);
+    assert.match(instruction, /in Simplified Chinese/);
+    assert.match(material, /Song: 晴天\nArtists: 周杰伦\nAlbum: 叶惠美, 录音室版, 2003, 杰威尔/);
+    assert.match(material, /About 周杰伦:\nBorn in Taiwan\./);
+    assert.ok(material.includes(`About the album:\n${'x'.repeat(1200)}…`), 'a long source is cut');
+    assert.equal(llm.calls[0].sessionId, harness.dj.sessionId, 'it carries the DJ identity');
+
+    await harness.dj.introduce(SONG_INFO);
+    assert.match(llm.calls[1].messages[0].content[0].text, /in English/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('with no model there is no introduction, and a failed one says why', async () => {
+  const none = makeDj();
+  const failing = makeDj({ llm: makeLlm({ fail: 'offline' }), model: { provider: 'opencode-go', model: 'm' } });
+  const silent = makeDj({ llm: makeLlm({ reply: '```\n```' }), model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    assert.equal(await none.dj.introduce(SONG_INFO), null);
+    await assert.rejects(failing.dj.introduce(SONG_INFO), /offline/);
+    await assert.rejects(silent.dj.introduce(SONG_INFO), /wrote no introduction/);
+  } finally {
+    none.cleanup();
+    failing.cleanup();
+    silent.cleanup();
+  }
+});
+
+test('the material leaves out what NetEase does not have', () => {
+  const material = introMaterial({ name: 'Song', artists: [], album: {}, genres: [], tags: [], featuredIn: [], awards: [] });
+  assert.equal(material, 'Song: Song\nArtists: (unknown)');
 });
 
 test('start() enables the DJ and plays the plan', async () => {

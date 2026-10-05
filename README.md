@@ -2,7 +2,7 @@
 
 NetEase Cloud Music ([music.163.com](https://music.163.com)) playback and an AI DJ for DeepSeek Harness.
 
-A **Music** entry in the DSH sidebar opens a player: queue, synced lyrics, QR sign-in, NetEase likes, and an AI DJ that keeps the queue stocked. The agent can drive the same player through seven tools.
+A **Music** entry in the DSH sidebar opens a player: queue, song details and synced lyrics, QR sign-in, NetEase likes, and an AI DJ that keeps the queue stocked. The agent can drive the same player through seven tools.
 
 Developing the plugin, or curious how it works? See [docs/DESIGN.md](https://github.com/doitian/dsh-music/blob/main/docs/DESIGN.md).
 
@@ -42,7 +42,9 @@ Music plays in the Harness window, so keep it open. Playback continues while you
 
 ## Using the player
 
-On a wide window the player has two columns: what is playing on the left — cover, the song's controls, transport and lyrics — and what comes next on the right — the AI DJ card and the queue. On a narrow one they stack.
+On a wide window the player has two columns: what is playing on the left — cover, the song's controls, transport, and the song's details or lyrics — and what comes next on the right — the AI DJ card and the queue. On a narrow one they stack.
+
+**Details and lyrics.** Under the transport controls, **Details** shows what NetEase knows about the song: its album (edition, release date, label), genre, tags, language and tempo, awards, and the films or shows it was featured in. Below them, the DJ's model writes a short introduction to the song and its singer from what NetEase holds. It loads after everything else, so the song starts at once. Click the introduction to see NetEase's own text instead: a review, and introductions to each singer and to the album. Click one of those paragraphs to read all of it. Without a model, NetEase's text shows directly. Switch to **Lyrics** for the synced lines. The player remembers which one you chose.
 
 **Quality.** Pick a level under the transport controls: `standard`, `higher`, `exhigh` (320 kbps, the default), `lossless`, `hires`, or the spatial tiers `jymaster`, `dolby`, `sky`, `jyeffect`. If a track doesn't offer the level, playback steps down until something plays, and the caption shows what was actually served.
 
