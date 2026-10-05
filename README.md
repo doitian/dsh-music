@@ -40,29 +40,31 @@ Music plays in the Harness window, so keep it open. Playback continues while you
 
 ## Using the player
 
-**Quality.** Pick a level in the transport row: `standard`, `higher`, `exhigh` (320 kbps, the default), `lossless`, `hires`, or the spatial tiers `jymaster`, `dolby`, `sky`, `jyeffect`. If a track doesn't offer the level, playback steps down until something plays, and the caption shows what was actually served.
+On a wide window the player has two columns: what is playing on the left — cover, the song's controls, transport and lyrics — and what comes next on the right — the AI DJ card and the queue. On a narrow one they stack.
+
+**Quality.** Pick a level under the transport controls: `standard`, `higher`, `exhigh` (320 kbps, the default), `lossless`, `hires`, or the spatial tiers `jymaster`, `dolby`, `sky`, `jyeffect`. If a track doesn't offer the level, playback steps down until something plays, and the caption shows what was actually served.
 
 **Taste.** Each track is liked, unrated or disliked:
 
 | Control | Effect |
 |---|---|
-| ♡ (row or transport) | Like on your NetEase account. Click again to unlike. |
-| ✕ (transport) | Dislike: the track leaves the queue, and the next one plays. Local only; the DJ stops picking it. |
+| ♡ (beside the title, or on a queue row) | Like on your NetEase account. Click again to unlike. |
+| ✕ (beside the title) | Dislike: the track leaves the queue, and the next one plays. Local only; the DJ stops picking it. |
 | ✕ (queue row) | Remove the track. An unrated track is also recorded as disliked. |
 
 **Skips.** Pressing next before 30 s (or before a quarter of a long track) counts as a skip. One skip lowers a track's rank; two remove it from the DJ's picks, and skipped plays count against the artist. A dislike is not also counted as a skip.
 
 ## The AI DJ
 
-Turn it on in the player or with `music_dj`. When fewer than 3 tracks remain, the DJ appends a batch of 5. It only stocks the queue; it never starts or stops playback.
+Turn it on with the switch in the player's AI DJ card, or with `music_dj`. When fewer than 3 tracks remain, the DJ appends a batch of 5. It only stocks the queue; it never starts or stops playback.
 
 **How it learns your taste:** from your NetEase likes, and from songs you hear through. A song the DJ picked counts only once you've listened past the skip window, so its own picks can't teach it what you like.
 
 **Where it looks:** songs similar to what you've heard and liked, personal FM and liked songs you haven't heard in three days (when signed in), the daily recommendations, new songs, and the four main charts. Signed in, the charts and new songs get fewer slots and your own sources more. Each source is cached for hours and sampled, so batches vary; requests to NetEase are spaced out rather than sent in a burst.
 
-**Boosts.** Want more songs like the one playing for a while, or fewer, without a lasting like or dislike? Press **▲** (more like this) or **▼** (fewer like this) in the transport row. A boost lasts an hour, then expires on its own. While the DJ is on, **▲** also queues a few similar songs right after the current one, and **▼** takes the DJ's upcoming picks that are like it out of the queue (songs you queued yourself stay). Active boosts are listed under the queue with their time left; press ✕ on one, or the filled arrow, to end it early. The agent can set them too, for any length from 5 minutes to 12 hours.
+**Boosts.** Want more songs like the one playing for a while, or fewer, without a lasting like or dislike? Press **▲** (more like this) or **▼** (fewer like this) beside the song title. A boost lasts an hour, then expires on its own. While the DJ is on, **▲** also queues a few similar songs right after the current one, and **▼** takes the DJ's upcoming picks that are like it out of the queue (songs you queued yourself stay). Active boosts are listed in the AI DJ card with their time left; press ✕ on one, or the filled arrow, to end it early. The agent can set them too, for any length from 5 minutes to 12 hours.
 
-**Mood brief.** Type a mood such as `雨天 爵士` or `90s cantopop`. The DJ searches NetEase playlists for it. With a model available, the brief is first rewritten into Chinese search terms, once per brief.
+**Mood brief.** Type a mood in the AI DJ card, such as `雨天 爵士` or `90s cantopop`. The DJ searches NetEase playlists for it. With a model available, the brief is first rewritten into Chinese search terms, once per brief.
 
 **Who chooses:**
 

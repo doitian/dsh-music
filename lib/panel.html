@@ -17,11 +17,15 @@
         color-scheme: light dark;
         --bg: var(--dsh-background, #ffffff);
         --fg: var(--dsh-foreground, #1b1c1e);
-        --muted: color-mix(in srgb, var(--fg) 55%, transparent);
-        --line: color-mix(in srgb, var(--fg) 14%, transparent);
+        --muted: color-mix(in srgb, var(--fg) 56%, transparent);
+        --faint: color-mix(in srgb, var(--fg) 38%, transparent);
+        --line: color-mix(in srgb, var(--fg) 12%, transparent);
         --panel: color-mix(in srgb, var(--fg) 4%, transparent);
+        --hover: color-mix(in srgb, var(--fg) 7%, transparent);
         --accent: #e8503a;
-        --radius: 10px;
+        --accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
+        --radius: 12px;
+        --gap: 16px;
       }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; }
@@ -35,153 +39,202 @@
         background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
         padding: 5px 10px; cursor: pointer; white-space: nowrap;
       }
-      button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--fg) 30%, transparent); }
+      button:hover:not(:disabled) { background: var(--hover); }
+      /* The trip to NetEase is not instant on a cold cache; a click has to look
+         like it landed before the rows come back. */
       button:disabled { opacity: 0.45; cursor: default; }
       button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
       input, select {
-        background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
       }
-      input:focus, select:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+      input:focus, select:focus, button:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
+      svg { display: block; width: 18px; height: 18px; fill: currentColor; }
 
+      /* ------------------------------------------------------------ layout
+         Wide: the stage (what is playing) on the left, what comes next — the
+         DJ and the queue — on the right, each column scrolling on its own.
+         Narrow: one column, the whole page scrolling. */
       #app { display: flex; flex-direction: column; height: 100%; }
-
       header {
-        display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-        border-bottom: 1px solid var(--line); flex-wrap: wrap;
+        display: flex; align-items: center; gap: 10px; padding: 10px var(--gap);
+        border-bottom: 1px solid var(--line); flex: none;
       }
       .brand { font-weight: 650; letter-spacing: 0.2px; }
       .brand small { font-weight: 400; color: var(--muted); margin-left: 6px; }
       .spacer { flex: 1; }
-      #dj-prompt { min-width: 200px; flex: 0 1 260px; }
-      #dj-toggle.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-      #account { display: flex; align-items: center; gap: 7px; color: var(--muted); }
-      #account img { width: 22px; height: 22px; border-radius: 50%; }
+      #account { display: flex; align-items: center; gap: 7px; color: var(--muted); min-width: 0; }
+      #account span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #account img { width: 22px; height: 22px; border-radius: 50%; flex: none; }
 
-      main { display: flex; flex: 1; min-height: 0; }
-      .player { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-
-      .scroll { overflow: auto; padding: 0 8px 16px; flex: 1; }
-      .scroll::-webkit-scrollbar { width: 9px; }
-      .scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg) 18%, transparent); border-radius: 9px; }
-
-      .row {
-        display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer;
+      main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+      .stage, .side { display: flex; flex-direction: column; gap: var(--gap); padding: var(--gap); min-width: 0; }
+      @media (max-width: 859px) {
+        /* Stacked, the two columns share one gap rather than two paddings. */
+        .side { padding-top: 0; }
       }
-      .row:hover { background: var(--panel); }
-      .row.playing { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-      .row .idx { width: 22px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
-      .row img { width: 34px; height: 34px; border-radius: 6px; object-fit: cover; flex: none; background: var(--panel); }
+      @media (min-width: 860px) {
+        main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 30%); overflow: hidden; }
+        .stage { overflow: auto; }
+        .side { overflow: hidden; border-left: 1px solid var(--line); }
+        .side .queue-card { flex: 1; min-height: 0; }
+        .side #queue { overflow: auto; }
+        /* With a column of its own, the lyrics fill what the stage leaves. */
+        .stage .lyrics-card { flex: 1; min-height: 160px; }
+        .stage .lyrics { flex: 1; max-height: none; }
+      }
+
+      .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+      .card-head {
+        display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px;
+        color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+      }
+      .card-head .grow { flex: 1; }
+      .link {
+        background: none; border: 0; padding: 0; color: var(--muted); font: inherit;
+        text-transform: inherit; letter-spacing: inherit;
+      }
+      .link:hover:not(:disabled) { background: none; color: var(--fg); }
+
+      /* ------------------------------------------------------------- stage */
+      .np { display: flex; gap: 18px; align-items: flex-end; }
+      /* The frame holds the place, with a note in it, while there is no cover. */
+      .cover {
+        position: relative; width: clamp(96px, 22vw, 180px); aspect-ratio: 1; flex: none;
+        border-radius: var(--radius); overflow: hidden; background: var(--panel);
+        display: grid; place-items: center; color: var(--faint); font-size: 40px;
+        box-shadow: 0 6px 24px color-mix(in srgb, #000 14%, transparent);
+      }
+      .cover::before { content: "♪"; }
+      #cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .np-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+      .now-title { font-size: 22px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
+      .now-artists { font-size: 14px; }
+      .now-album { color: var(--muted); }
+      /* What to do about this track: the taste switchers and the boosts. A
+         state is an accent icon on a tint, never a solid block — the only
+         filled control on the stage is play. */
+      .taste { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+      .taste button {
+        width: 34px; height: 34px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+        background: none; font-size: 15px; line-height: 1; color: var(--muted);
+      }
+      .taste button:hover:not(:disabled) { color: var(--fg); background: var(--hover); }
+      .taste button.on { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+
+      .progress { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+      input[type="range"] { -webkit-appearance: none; appearance: none; background: transparent; border: 0; padding: 0; height: 16px; flex: 1; min-width: 0; }
+      input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--fg) 16%, transparent); }
+      input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
+      input[type="range"]:focus { outline: none; }
+
+      .transport { display: flex; align-items: center; justify-content: center; gap: 14px; }
+      .transport button { width: 40px; height: 40px; padding: 0; border-radius: 50%; display: grid; place-items: center; background: none; border-color: transparent; }
+      .transport button:hover:not(:disabled) { background: var(--hover); }
+      .transport #play { width: 52px; height: 52px; background: var(--accent); color: #fff; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+      .transport #play:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); }
+      .transport #play svg { width: 22px; height: 22px; }
+
+      .secondary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+      .secondary select, .secondary > button { padding: 4px 8px; font-size: 12px; }
+      #quality-info { color: var(--muted); }
+      #mute { background: none; border-color: transparent; padding: 4px; color: var(--muted); }
+      #mute:hover:not(:disabled) { color: var(--fg); }
+      #volume { flex: 0 0 96px; }
+
+      .lyrics-card { display: flex; flex-direction: column; min-height: 0; }
+      /* The pane is a glance at the current line, not a page: a few lines of
+         synced text, scrolled for the rest. `--lyrics-lines` is the single knob. */
+      .lyrics {
+        --lyrics-lines: 6;
+        max-height: calc(var(--lyrics-lines) * 1.6em + var(--lyrics-lines) * 4px + 14px);
+        overflow: auto; padding: 2px 12px 14px; font-size: 14px; line-height: 1.6; scrollbar-width: none;
+      }
+      .lyrics::-webkit-scrollbar { display: none; }
+      .lyrics.collapsed { display: none; }
+      .lyrics p { margin: 0; padding: 2px 0; color: var(--faint); transition: color 0.15s; }
+      .lyrics p.on { color: var(--fg); font-weight: 600; }
+
+      .need-gesture {
+        background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        border-radius: var(--radius); padding: 8px 12px; font-size: 12px;
+      }
+
+      /* -------------------------------------------------------------- side */
+      .dj-card { padding-bottom: 12px; flex: none; }
+      .dj-card .card-head { padding-bottom: 8px; }
+      .dj-card .card-head .title { color: var(--fg); font-size: 13px; font-weight: 650; text-transform: none; letter-spacing: 0; }
+      .dj-body { display: flex; flex-direction: column; gap: 8px; padding: 0 12px; font-size: 12px; }
+      #dj-prompt { width: 100%; }
+      /* The DJ switch: a toggle that reads on or off at a glance. */
+      #dj-toggle {
+        position: relative; width: 38px; height: 22px; padding: 0; border-radius: 11px;
+        background: color-mix(in srgb, var(--fg) 20%, transparent); border: 0; color: transparent; overflow: hidden;
+      }
+      #dj-toggle::after {
+        content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+        background: #fff; transition: transform 0.15s; box-shadow: 0 1px 3px color-mix(in srgb, #000 30%, transparent);
+      }
+      #dj-toggle.on { background: var(--accent); }
+      #dj-toggle.on::after { transform: translateX(16px); }
+      #dj-toggle:hover:not(:disabled) { filter: brightness(0.96); }
+      .plan b { color: var(--accent); }
+      .plan .muted, .muted { color: var(--muted); }
+      .plan > div + div { margin-top: 2px; }
+
+      #boosts:empty { display: none; }
+      #boosts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--muted); }
+      #boosts .boost {
+        display: inline-flex; gap: 2px; align-items: center; color: var(--fg);
+        background: var(--accent-soft); border-radius: 999px; padding: 1px 2px 1px 9px;
+      }
+      #boosts .boost button { border: 0; background: none; padding: 0 6px; color: var(--muted); }
+      #boosts .boost button:hover:not(:disabled) { color: var(--fg); }
+
+      /* The DJ model picker is a set-once setting, so it keeps only its header
+         row until asked. The header is the click target; the chevron inside it
+         is the keyboard one. */
+      .model { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 8px; }
+      .model-head { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
+      .model-head .model-now {
+        flex: 1; min-width: 0; text-align: right; color: var(--muted);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .model-head .toggle { background: none; border: 0; margin: 0; padding: 0 2px; font: inherit; color: var(--muted); }
+      .model-head .toggle:hover:not(:disabled) { background: none; color: var(--fg); }
+      .model-head .warn { color: var(--accent); }
+      .dj-model-body.collapsed { display: none; }
+      .row-inline { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+      .row-inline select, .row-inline input { flex: 1 1 0; min-width: 0; font-size: 12px; padding: 4px 6px; }
+      .row-inline button { font-size: 12px; padding: 4px 8px; }
+
+      .queue-card { display: flex; flex-direction: column; overflow: hidden; }
+      #queue { padding: 0 6px 6px; }
+      .row { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 8px; cursor: pointer; }
+      .row:hover { background: var(--hover); }
+      .row.playing { background: var(--accent-soft); }
+      .row.playing .name { color: var(--accent); font-weight: 600; }
+      .row .idx { width: 20px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; }
+      .row.playing .idx { color: var(--accent); }
+      .row img { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; flex: none; background: var(--panel); }
       .row .meta { min-width: 0; flex: 1; }
       .row .name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .row .sub { display: block; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .row .tag { font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; color: var(--muted); flex: none; }
-      .row .dur { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; }
+      .row .tag { font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); flex: none; }
+      .row .dur { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; min-width: 32px; text-align: right; }
       .row .acts { display: none; gap: 4px; flex: none; }
+      .row .acts button { padding: 1px 6px; font-size: 11px; background: none; color: var(--muted); }
       .row:hover .acts { display: flex; }
       /* The list's own like control. A liked track keeps its filled heart
          visible; the hollow one only appears on hover, so an unrated list is
          not a wall of outlines. */
       .row .heart {
         background: none; border: 0; padding: 0; width: 16px; flex: none;
-        font-size: 14px; line-height: 1; color: var(--muted); opacity: 0;
-        transition: opacity 0.12s;
+        font-size: 14px; line-height: 1; color: var(--muted); opacity: 0; transition: opacity 0.12s;
       }
       .row:hover .heart { opacity: 1; }
       .row .heart.on { opacity: 1; color: var(--accent); }
-
-      .now { padding: 14px; border-bottom: 1px solid var(--line); }
-      .now-top { display: flex; gap: 14px; }
-      .now-top img { width: 104px; height: 104px; border-radius: 10px; object-fit: cover; background: var(--panel); flex: none; }
-      .now-title { font-size: 16px; font-weight: 650; line-height: 1.3; }
-      .now-artists { color: var(--muted); margin-top: 3px; }
-      .now-album { color: var(--muted); font-size: 12px; margin-top: 2px; }
-      .bar { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-      input[type="range"] { -webkit-appearance: none; appearance: none; background: transparent; padding: 0; height: 16px; flex: 1; min-width: 0; }
-      input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--fg) 18%, transparent); }
-      input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
-      .controls { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-      .controls .grow { flex: 1; }
-      .icon { font-size: 15px; line-height: 1; }
-      /* A filled heart means the track is liked on the account. */
-      #like.on, #dislike.on, #boost-more.on, #boost-less.on {
-        color: #fff;
-        background: var(--accent);
-        border-color: var(--accent);
-      }
-      #volume { flex: 0 0 88px; }
-      /* A card like the DJ status above it and the model card below, so the
-         three stack on one edge with one rhythm. */
-      #boosts:empty { display: none; }
-      #boosts {
-        margin: 0 14px 12px;
-        padding: 7px 11px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: var(--panel);
-        font-size: 12px;
-        color: var(--muted);
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        align-items: center;
-      }
-      #boosts .boost {
-        display: inline-flex;
-        gap: 2px;
-        align-items: center;
-        color: var(--fg);
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 1px 2px 1px 8px;
-      }
-      #boosts .boost button { border: 0; background: none; padding: 0 5px; min-width: 0; cursor: pointer; color: var(--muted); }
-      #boosts .boost button:hover { color: var(--fg); }
-      .mode { font-size: 12px; }
-      /* The trip to NetEase is not instant on a cold cache; a click has to look
-         like it landed before the rows come back. */
-      button:disabled { cursor: default; }
-
-      .section-title { padding: 12px 14px 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
-      .section-title.head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-      .section-title.head button {
-        background: none; border: 0; margin: 0; padding: 0; font: inherit; color: var(--muted);
-        text-transform: inherit; letter-spacing: inherit; cursor: pointer;
-      }
-      .section-title.head button:hover { color: var(--fg); }
-      /* The pane is a glance at the current line, not a page: four lines of
-         synced text, scrolled for the rest, so the queue keeps the space.
-         `--lyrics-lines` is the single knob (the padding below is the `+ 12px`). */
-      .lyrics {
-        --lyrics-lines: 4;
-        max-height: calc(var(--lyrics-lines) * 1.5em + var(--lyrics-lines) * 4px + 12px);
-        line-height: 1.5; overflow: auto; padding: 0 14px 12px;
-      }
-      .lyrics.collapsed { display: none; }
-      .lyrics p { margin: 0; padding: 2px 0; color: var(--muted); transition: color 0.15s; }
-      .lyrics p.on { color: var(--fg); font-weight: 600; }
-      .queue { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-      .queue .scroll { padding-top: 0; }
-      .dj-status { margin: 0 14px 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font-size: 12px; }
-      .dj-status b { color: var(--accent); }
-      /* The DJ model picker is a set-once setting, so the card keeps only its
-         header row and the queue and the lyrics pane keep the space. The header
-         is the click target; the chevron inside it is the keyboard one. */
-      .model-head { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
-      .model-head .model-now {
-        flex: 1; min-width: 0; text-align: right; color: var(--muted);
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      }
-      .model-head .toggle {
-        background: none; border: 0; margin: 0; padding: 0 2px; font: inherit;
-        color: var(--muted); cursor: pointer;
-      }
-      .model-head .toggle:hover { color: var(--fg); }
-      .model-head .warn { color: var(--accent); }
-      .dj-model-body.collapsed { display: none; }
-      .row-inline { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
-      .row-inline select, .row-inline input { flex: 1 1 0; min-width: 0; font-size: 12px; padding: 4px 6px; }
-      .row-inline button { font-size: 12px; padding: 4px 8px; }
       .empty { padding: 24px 14px; color: var(--muted); text-align: center; }
+
       .toast {
         position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
         background: #1b1c1e; color: #fff; padding: 8px 14px; border-radius: 9px; font-size: 12px;
@@ -195,8 +248,8 @@
       dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
       #qr { display: block; margin: 12px auto; width: 220px; height: 220px; image-rendering: pixelated; border-radius: 8px; background: #fff; padding: 8px; }
       .hint { color: var(--muted); font-size: 12px; text-align: center; }
+      .lyrics .hint { text-align: left; }
       .row-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 14px; }
-      .need-gesture { background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: var(--radius); padding: 8px 11px; margin: 0 14px 12px; font-size: 12px; }
     </style>
   </head>
   <body>
@@ -204,85 +257,104 @@
       <header>
         <div class="brand"><span data-i18n="brand">Music</span><small>music.163.com</small></div>
         <div class="spacer"></div>
-        <input id="dj-prompt" data-i18n-ph="djPromptPh" placeholder="AI DJ mood, e.g. rainy afternoon jazz" />
-        <button id="dj-toggle" data-i18n-title="djToggleTitle" title="Continuous AI DJ: keep the queue stocked">AI DJ</button>
         <div id="account"></div>
       </header>
 
       <main>
-        <section class="player">
-          <div class="now">
-            <div class="now-top">
-              <img id="cover" alt="" />
-              <div style="min-width: 0; flex: 1">
-                <div class="now-title" id="np-title" data-i18n="nothingPlaying">Nothing playing</div>
-                <div class="now-artists" id="np-artists"></div>
-                <div class="now-album" id="np-album"></div>
-              </div>
-            </div>
-            <div class="bar">
-              <span id="t-cur">0:00</span>
-              <input type="range" id="seek" min="0" max="1000" value="0" step="1" />
-              <span id="t-dur">0:00</span>
-            </div>
-            <div class="controls">
-              <button id="prev" data-i18n-title="prev" title="Previous">⏮</button>
-              <button id="play" class="primary" data-i18n-title="playPause" title="Play/pause">▶</button>
-              <button id="next" data-i18n-title="next" title="Next">⏭</button>
-              <button id="mode" class="mode" data-i18n-title="modeTitle" data-i18n="modeList" title="Playback mode">List</button>
-              <select id="quality" class="mode" data-i18n-title="qualityTitle" title="Streaming quality"></select>
-              <span id="quality-info" class="mode" style="color: var(--muted)"></span>
-              <span class="grow"></span>
+        <section class="stage">
+          <div id="notices"></div>
+          <div class="np">
+            <div class="cover"><img id="cover" alt="" /></div>
+            <div class="np-text">
+              <div class="now-title" id="np-title" data-i18n="nothingPlaying">Nothing playing</div>
+              <div class="now-artists" id="np-artists"></div>
+              <div class="now-album" id="np-album"></div>
               <!-- Labels are state-dependent (a filled heart un-likes), so the
                    script owns text and title rather than data-i18n. -->
-              <button id="like" title="Like">♡</button>
-              <button id="dislike" title="Dislike">✕</button>
-              <button id="boost-more" title="More like this for an hour">▲</button>
-              <button id="boost-less" title="Fewer like this for an hour">▼</button>
-              <button id="mute" data-i18n-title="mute" title="Mute">🔊</button>
-              <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
+              <div class="taste">
+                <button id="like" title="Like">♡</button>
+                <button id="dislike" title="Dislike">✕</button>
+                <button id="boost-more" title="More like this for an hour">▲</button>
+                <button id="boost-less" title="Fewer like this for an hour">▼</button>
+              </div>
             </div>
           </div>
 
-          <div class="section-title head">
-            <span data-i18n="lyrics">Lyrics</span>
-            <!-- Label and title are state-dependent, so the script owns them
-                 (applyStaticStrings cannot know which way the pane is now). -->
-            <button id="lyrics-toggle" type="button" aria-expanded="true">Hide</button>
+          <div class="progress">
+            <span id="t-cur">0:00</span>
+            <input type="range" id="seek" min="0" max="1000" value="0" step="1" />
+            <span id="t-dur">0:00</span>
           </div>
-          <div class="lyrics" id="lyrics"><p class="hint">—</p></div>
+          <div class="transport">
+            <button id="prev" data-i18n-title="prev" title="Previous"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg></button>
+            <button id="play" data-i18n-title="playPause" title="Play/pause"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+            <button id="next" data-i18n-title="next" title="Next"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l10.5-7z"/></svg></button>
+          </div>
+          <div class="secondary">
+            <button id="mode" data-i18n-title="modeTitle" data-i18n="modeList" title="Playback mode">List</button>
+            <select id="quality" data-i18n-title="qualityTitle" title="Streaming quality"></select>
+            <span id="quality-info"></span>
+            <span class="spacer"></span>
+            <button id="mute" data-i18n-title="mute" title="Mute"></button>
+            <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
+          </div>
 
-          <div class="section-title"><span data-i18n="queue">Queue</span> <span id="counts"></span></div>
-          <div class="queue"><div class="scroll" id="queue"></div></div>
-          <div id="dj-status"></div>
-          <div id="boosts"></div>
-
-          <div class="dj-status" id="dj-model">
-            <!-- One always-visible line: the setting that matters at a glance is
-                 the effective route, and the form below it is folded away until
-                 asked for. -->
-            <div class="model-head" id="dj-model-head">
-              <span data-i18n="djModel">DJ model</span>
-              <span class="model-now"><span id="dj-model-route"></span><span id="dj-model-source"></span><span class="warn" id="dj-model-warn"></span></span>
-              <button id="dj-model-toggle" class="toggle" type="button" aria-controls="dj-model-body" aria-expanded="false"></button>
+          <div class="card lyrics-card">
+            <div class="card-head">
+              <span data-i18n="lyrics">Lyrics</span>
+              <span class="grow"></span>
+              <!-- Label and title are state-dependent, so the script owns them
+                   (applyStaticStrings cannot know which way the pane is now). -->
+              <button id="lyrics-toggle" class="link" type="button" aria-expanded="true">Hide</button>
             </div>
-            <div class="dj-model-body collapsed" id="dj-model-body">
-              <div class="row-inline">
-                <select id="dj-provider" title="provider route"></select>
-                <select id="dj-model-select" title="model"></select>
-              </div>
-              <div class="row-inline">
-                <input id="dj-model-custom" data-i18n-ph="customModelPh" placeholder="Custom model id" style="display: none" />
-              </div>
-              <div class="row-inline">
-                <button id="dj-model-save" class="primary" data-i18n="save">Save</button>
-                <button id="dj-model-test" data-i18n="test">Test</button>
-                <button id="dj-model-clear" data-i18n="revert" data-i18n-title="revertTitle" title="Revert to the profile patch">Revert</button>
-              </div>
-              <div id="dj-model-status" style="color: var(--muted)"></div>
-            </div>
+            <div class="lyrics" id="lyrics"><p class="hint">—</p></div>
           </div>
         </section>
+
+        <aside class="side">
+          <div class="card dj-card">
+            <div class="card-head">
+              <span class="title">AI DJ</span>
+              <span class="grow"></span>
+              <button id="dj-toggle" role="switch" data-i18n-title="djToggleTitle" title="Continuous AI DJ: keep the queue stocked">AI DJ</button>
+            </div>
+            <div class="dj-body">
+              <input id="dj-prompt" data-i18n-ph="djPromptPh" placeholder="AI DJ mood, e.g. rainy afternoon jazz" />
+              <div id="dj-status"></div>
+              <div id="boosts"></div>
+              <div class="model" id="dj-model">
+                <!-- One always-visible line: the setting that matters at a glance is
+                     the effective route, and the form below it is folded away until
+                     asked for. -->
+                <div class="model-head" id="dj-model-head">
+                  <span data-i18n="djModel">DJ model</span>
+                  <span class="model-now"><span id="dj-model-route"></span><span id="dj-model-source"></span><span class="warn" id="dj-model-warn"></span></span>
+                  <button id="dj-model-toggle" class="toggle" type="button" aria-controls="dj-model-body" aria-expanded="false"></button>
+                </div>
+                <div class="dj-model-body collapsed" id="dj-model-body">
+                  <div class="row-inline">
+                    <select id="dj-provider" title="provider route"></select>
+                    <select id="dj-model-select" title="model"></select>
+                  </div>
+                  <div class="row-inline">
+                    <input id="dj-model-custom" data-i18n-ph="customModelPh" placeholder="Custom model id" style="display: none" />
+                  </div>
+                  <div class="row-inline">
+                    <button id="dj-model-save" class="primary" data-i18n="save">Save</button>
+                    <button id="dj-model-test" data-i18n="test">Test</button>
+                    <button id="dj-model-clear" data-i18n="revert" data-i18n-title="revertTitle" title="Revert to the profile patch">Revert</button>
+                  </div>
+                  <div id="dj-model-status" class="muted"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card queue-card">
+            <div class="card-head"><span data-i18n="queue">Queue</span> <span id="counts"></span></div>
+            <div id="queue"></div>
+          </div>
+        </aside>
       </main>
     </div>
 
@@ -295,7 +367,6 @@
         <button id="qr-close" class="primary" data-i18n="close">Close</button>
       </div>
     </dialog>
-
     <div class="toast" id="toast"></div>
 
     <script src="__BASE__/vendor/qrcode.js"></script>
@@ -526,6 +597,21 @@
       }
 
       /** Translate a key, interpolating `{name}` placeholders from `vars`. */
+      /** Monochrome icons for controls whose glyph changes with state. */
+      const ICONS = {
+        play: '<path d="M8 5v14l11-7z"/>',
+        pause: '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>',
+        volume: '<path d="M4 9v6h4l5 4V5L8 9zM16 8.5a4.5 4.5 0 0 1 0 7l-1-1.3a2.9 2.9 0 0 0 0-4.4zM17.8 5.6a8 8 0 0 1 0 12.8l-1-1.3a6.4 6.4 0 0 0 0-10.2z"/>',
+        muted: '<path d="M4 9v6h4l5 4V5L8 9zM16.3 9.4l1.1-1.1 2.1 2.1 2.1-2.1 1.1 1.1-2.1 2.1 2.1 2.1-1.1 1.1-2.1-2.1-2.1 2.1-1.1-1.1 2.1-2.1z"/>',
+      };
+
+      /** Paint `name` into `el`, touching the DOM only when it changes. */
+      function setIcon(el, name) {
+        if (!el || el.dataset.icon === name) return;
+        el.dataset.icon = name;
+        el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+      }
+
       function t(key, vars) {
         let text = DICT[LANG]?.[key] ?? DICT.en[key] ?? key;
         if (vars) {
@@ -913,7 +999,7 @@
             $('lyrics').innerHTML = '<p class="hint">—</p>';
           }
         }
-        $('play').textContent = state.playing ? '⏸' : '▶';
+        setIcon($('play'), state.playing ? 'pause' : 'play');
         $('mode').textContent = { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList');
         $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
         $('dj-toggle').classList.toggle('on', Boolean(state.dj?.enabled));
@@ -932,11 +1018,11 @@
         // DJ status
         const dj = state.dj || {};
         $('dj-status').innerHTML = dj.enabled || dj.lastPlan
-          ? `<div class="dj-status">${dj.busy ? esc(t('djPlanning')) : dj.error ? `AI DJ: ${esc(dj.error)}` : ''}${
+          ? `<div class="plan">${dj.busy ? esc(t('djPlanning')) : dj.error ? `AI DJ: ${esc(dj.error)}` : ''}${
               dj.lastPlan
-                ? `<div><b>${esc(dj.lastPlan.source === 'model' ? 'AI DJ' : 'AI DJ (heuristic)')}</b>${dj.lastPlan.route ? ` <span style="color:var(--muted)">${esc(dj.lastPlan.route)}</span>` : ''} +${dj.lastPlan.added}: ${esc(dj.lastPlan.vibe || '')}</div><div style="color:var(--muted)">${esc((dj.lastPlan.names || []).slice(-3).join(' · '))}</div>`
+                ? `<div><b>+${dj.lastPlan.added}</b> ${esc(dj.lastPlan.vibe || '')}</div><div class="muted">${esc((dj.lastPlan.names || []).slice(-3).join(' · '))}</div>`
                 : ''
-            }${dj.modelError && !dj.lastPlan?.route ? `<div style="color:var(--muted)">${esc(t('modelTierUnavailable'))}: ${esc(dj.modelError)}</div>` : ''}${dj.enabled ? `<div style="color:var(--muted);margin-top:4px">${esc(t('djStocking'))}</div>` : ''}</div>`
+            }${dj.modelError && !dj.lastPlan?.route ? `<div class="muted">${esc(t('modelTierUnavailable'))}: ${esc(dj.modelError)}</div>` : ''}${dj.lastPlan?.source === 'heuristic' ? `<div class="muted">${esc(t('heuristics'))}</div>` : ''}</div>`
           : '';
 
         if (autoplayBlocked()) {
@@ -945,7 +1031,7 @@
             el.id = 'gesture';
             el.className = 'need-gesture';
             el.innerHTML = `${esc(t('gestureText'))} — <button id="gesture-go" class="primary">${esc(t('gesturePlay'))}</button> <span style="color:var(--muted)">${esc(t('gestureNote'))}</span>`;
-            $('dj-status').before(el);
+            $('notices').append(el);
             el.querySelector('#gesture-go').onclick = resumeWithGesture;
           }
         } else {
@@ -955,7 +1041,7 @@
         // The engine owns the real volume; mirror it unless the user is
         // mid-drag, when overwriting the thumb would fight the pointer.
         if (document.activeElement !== $('volume')) $('volume').value = state.volume;
-        $('mute').textContent = state.muted || state.volume === 0 ? '🔇' : '🔊';
+        setIcon($('mute'), state.muted || state.volume === 0 ? 'muted' : 'volume');
 
         // Same for quality: the host is authoritative, the select mirrors it.
         const preferredLevel = state.audio?.preferred;
@@ -1611,7 +1697,7 @@
         // The engine owns the real gain; mirror it locally and throttle the
         // round-trip while the pointer is still down.
         if (state) state.volume = value;
-        $('mute').textContent = value === 0 ? '🔇' : '🔊';
+        setIcon($('mute'), value === 0 ? 'muted' : 'volume');
         if (Date.now() - volumePostAt > 150) {
           volumePostAt = Date.now();
           control({ action: 'volume', value });

@@ -40,7 +40,7 @@ page follows the shell's `<html lang>` live, re-rendering in place.
 
 ## Streaming quality
 
-The transport row carries a quality picker. Levels, richest first:
+The player carries a quality picker under the transport controls. Levels, richest first:
 
 | Level | What it serves |
 |---|---|
@@ -84,8 +84,8 @@ A track holds one of three taste levels — **liked**, **unrated**, or
 
 | Control | Level it sets |
 |---|---|
-| the **♡ / ♥** in a queue row, or the heart in the transport row | **liked** — the track goes into the account's 我喜欢的音乐 playlist on NetEase. Clicking the filled heart takes the like back. |
-| the **✕** in the transport row | **disliked** — local, and fed to the DJ, which stops picking the track. The track leaves the queue, so playback moves on to the next one. |
+| the **♡ / ♥** in a queue row, or the heart beside the title | **liked** — the track goes into the account's 我喜欢的音乐 playlist on NetEase. Clicking the filled heart takes the like back. |
+| the **✕** beside the title | **disliked** — local, and fed to the DJ, which stops picking the track. The track leaves the queue, so playback moves on to the next one. |
 | the **✕** on a queue row | **disliked** as well. Taking a track out of the queue is a judgement about the track, not just about the list — without recording it the DJ re-derives the same track from the same similarity and charts within a batch or two. |
 | neither | unrated. |
 
@@ -143,7 +143,7 @@ something:
 
 A skip is a fourth, softer signal, with no button of its own:
 **moving to the next track before 30 seconds, or before a quarter of the track
-when that is longer**, records one — from the transport row or the agent's
+when that is longer**, records one — from the player's next button or the agent's
 `music_control next`; jumping to a queue row does not count. It is local, like
 a dislike.
 
@@ -359,7 +359,7 @@ heard.
 
 ### Choosing the model
 
-**In the player.** The right column carries a **AI DJ 模型 / DJ model**
+**In the player.** The AI DJ card in the right column folds in an **AI DJ 模型 / DJ model**
 panel: a provider picker, a model picker, and three buttons.
 
 | Control | What it does |
