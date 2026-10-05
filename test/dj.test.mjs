@@ -1080,6 +1080,7 @@ test('the first seed keeps all its similar tracks; the others share the rest', a
 
 test('a brief draws from its best-loved playlists, past their first twenty tracks', async () => {
   const resolved = [];
+  const loaded = [];
   const playlist = (id, size) => ({
     id,
     // Only the head comes with details, as for a playlist the account does not own.
@@ -1094,7 +1095,11 @@ test('a brief draws from its best-loved playlists, past their first twenty track
       { id: 24, name: 'liked', trackCount: 100, playCount: 2_000_000 },
       { id: 25, name: 'known', trackCount: 100, playCount: 1_000_000 },
     ],
-    playlistDetail: async (id) => (id >= 21 && id <= 25 ? playlist(id, 100) : { tracks: [] }),
+    playlistDetail: async (id) => {
+      if (id < 21 || id > 25) return { tracks: [] };
+      loaded.push(id);
+      return playlist(id, 100);
+    },
     songDetail: async (ids) => {
       resolved.push(...ids);
       return ids.map((id) => ({ id, name: `M deep ${id}`, artists: ['Deep'], duration: 1000 }));
@@ -1105,8 +1110,9 @@ test('a brief draws from its best-loved playlists, past their first twenty track
   try {
     await harness.dj.plan({ prompt: '雨天 爵士', count: 1 });
     const catalogue = llm.calls[0].messages[0].content[1].text;
-    const sources = new Set([...catalogue.matchAll(/(?:M|M deep )(\d\d)\d{3}/g)].map((match) => Number(match[1])));
-    assert.deepEqual([...sources].sort(), [23, 24, 25], 'the three most played among the relevant, never a thin one');
+    // Which playlists were drawn from is read off what was loaded: which of them
+    // the 15-track sample happens to land in is random, by design.
+    assert.deepEqual(loaded.sort(), [23, 24, 25], 'the three most played among the relevant, never a thin one');
     assert.ok(resolved.length > 0 && resolved.every((id) => id % 1000 >= 20), 'only tracks past the head are looked up');
     assert.match(catalogue, /^0\. M/m, "the brief's playlist tracks lead the catalogue");
   } finally {
