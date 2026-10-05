@@ -365,7 +365,11 @@
           </div>
 
           <div class="card queue-card">
-            <div class="card-head"><span data-i18n="queue">Queue</span> <span id="counts"></span></div>
+            <div class="card-head">
+              <span data-i18n="queue">Queue</span> <span id="counts"></span>
+              <span class="grow"></span>
+              <button id="queue-clear" class="link" type="button" data-i18n="clearQueue" data-i18n-title="clearQueueTitle">Clear</button>
+            </div>
             <div id="queue"></div>
           </div>
         </aside>
@@ -458,6 +462,8 @@
           queueEmpty: '队列为空，用 AI DJ 或让助手补歌',
           remove: '移除',
           removed: '已移除',
+          clearQueue: '清空',
+          clearQueueTitle: '清空队列，保留正在播放的歌曲；不会给歌曲打分',
           loading: '加载中…',
           instrumental: '纯音乐，无歌词',
           other: '其他…',
@@ -560,6 +566,8 @@
           queueEmpty: 'Queue empty — use the AI DJ or ask the assistant to add songs',
           remove: 'Remove',
           removed: 'Removed',
+          clearQueue: 'Clear',
+          clearQueueTitle: 'Clear the queue, keeping the song playing; no song is rated',
           loading: 'Loading…',
           instrumental: 'Instrumental',
           other: 'Other…',
@@ -1069,6 +1077,7 @@
         setIcon($('play'), state.playing ? 'pause' : 'play', { filled: true });
         $('mode').textContent = { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList');
         $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
+        $('queue-clear').disabled = (state.queue?.length ?? 0) <= (state.current ? 1 : 0);
         $('dj-toggle').classList.toggle('on', Boolean(state.dj?.enabled));
         paintHistory();
         // The mood brief is persisted player setting, not part of the DJ status
@@ -1833,6 +1842,15 @@
         } catch (error) { toast(error.message); }
       };
       $('dj-prompt').onchange = () => api('/dj', { method: 'POST', body: { prompt: $('dj-prompt').value, enabled: state?.dj?.enabled } }).then((data) => { state = data; render(); }).catch((error) => toast(error.message));
+
+      // Not row-by-row removal, which reads each row as a dislike.
+      $('queue-clear').onclick = async () => {
+        try {
+          state = await api('/queue', { method: 'POST', body: { action: 'clear', keepCurrent: true } });
+          render();
+          pokeEngine();
+        } catch (error) { toast(failureText(error)); }
+      };
 
       $('queue').onclick = async (event) => {
         const like = event.target.closest('[data-like]');

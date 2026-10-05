@@ -53,12 +53,15 @@ On a wide window the player has two columns: what is playing on the left — cov
 | ♡ (beside the title, or on a queue row) | Like on your NetEase account. Click again to unlike. |
 | ✕ (beside the title) | Dislike: the track leaves the queue, and the next one plays. Local only; the DJ stops picking it. |
 | ✕ (queue row) | Remove the track. An unrated track is also recorded as disliked. |
+| Clear (queue header) | Empty the queue except the song playing. Nothing is rated. |
 
 **Skips.** Pressing next before 30 s (or before a quarter of a long track) counts as a skip. One skip lowers a track's rank; two remove it from the DJ's picks, and skipped plays count against the artist. A dislike is not also counted as a skip.
 
 ## The AI DJ
 
 Turn it on with the switch in the player's AI DJ card, or with `music_dj`. When fewer than 3 tracks remain, the DJ appends a batch of 5. It only stocks the queue; it never starts or stops playback.
+
+The queue is saved, so after a restart it's back where you left it, paused, and you can press play before the DJ plans anything.
 
 **How it learns your taste:** from your NetEase likes, and from songs you hear through. A song the DJ picked counts only once you've listened past the skip window, so its own picks can't teach it what you like.
 

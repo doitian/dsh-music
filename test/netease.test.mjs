@@ -782,6 +782,57 @@ test('removing a queue position reports what left', () => {
   assert.equal(nowhere.snapshot.queue.length, 0);
 });
 
+test('clearing around the playing track leaves its play open', () => {
+  const player = new Player();
+  const finished = [];
+  player.onFinish = (track) => finished.push(track.id);
+  player.setQueue([1, 2, 3].map((id) => ({ id, name: `T${id}`, artists: ['A'], duration: 1000 })));
+  player.jump(1);
+  player.report({ trackId: 2, position: 1, playing: true });
+  finished.length = 0;
+
+  player.clearKeepingCurrent();
+  assert.deepEqual(player.queue.map((track) => track.id), [2]);
+  assert.equal(player.index, 0);
+  assert.deepEqual(finished, [], 'the playing track is not ended, so it is not reported twice');
+
+  player.clear();
+  player.clearKeepingCurrent();
+  assert.equal(player.queue.length, 0, 'with nothing playing there is nothing to keep');
+});
+
+test('a restored queue is paused at its cursor, and an empty one restores nothing', () => {
+  const player = new Player();
+  player.restore({ tracks: [{ id: 1 }, { id: 2 }, null], index: 7 });
+  assert.deepEqual(player.queue.map((track) => track.id), [1, 2]);
+  assert.equal(player.index, 1, 'a cursor past the end is clamped');
+  assert.equal(player.playing, false);
+
+  const fresh = new Player();
+  fresh.restore({ tracks: [], index: 0 });
+  assert.equal(fresh.index, -1);
+});
+
+test('the saved queue drops its oldest played tracks first', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-queue-'));
+  try {
+    const store = new SessionStore({ file: path.join(dir, 'session.json') });
+    const tracks = Array.from({ length: 600 }, (_, index) => ({ id: index + 1 }));
+    store.saveQueue(tracks, 550);
+    assert.equal(store.savedQueue.tracks.length, 500);
+    assert.equal(store.savedQueue.tracks[store.savedQueue.index].id, 551, 'the cursor still names the same track');
+    assert.equal(store.savedQueue.tracks.at(-1).id, 600, 'nothing upcoming is lost');
+
+    store.saveQueue(tracks, 10);
+    assert.equal(store.savedQueue.tracks[0].id, 11, 'every played track goes before an upcoming one');
+    assert.equal(store.savedQueue.index, 0);
+    assert.equal(store.savedQueue.tracks.at(-1).id, 510, 'then the furthest upcoming');
+    store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('removing the playing track moves on, and past the end wraps to the start', () => {
   const player = new Player();
   player.setQueue([1, 2, 3, 4].map((id) => ({ id, name: `T${id}`, artists: ['A'], duration: 1000 })));

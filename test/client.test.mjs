@@ -716,12 +716,18 @@ function applyBoost(state, trackId, direction) {
  * Mirror one queue action onto the fake state, the way the host's `/queue` route
  * does.
  *
- * Only a removal is modelled, because that is the one the page's rows ask for:
- * the row leaves the list and the cursor follows it. The host reads an unrated
- * removal as a dislike as well, which the snapshot cannot show afterwards — the
- * row it belonged to is gone.
+ * A removal is what the page's rows ask for: the row leaves the list and the
+ * cursor follows it. The host reads an unrated removal as a dislike as well,
+ * which the snapshot cannot show afterwards — the row it belonged to is gone.
+ * Clear is the header's, and keeps only the playing track.
  */
-function applyQueueAction(state, { action, index } = {}) {
+function applyQueueAction(state, { action, index, keepCurrent } = {}) {
+  if (action === 'clear') {
+    state.queue = keepCurrent && state.current ? [state.current] : [];
+    state.index = state.queue.length - 1;
+    state.current = state.queue[0] ?? null;
+    return;
+  }
   if (action !== 'remove') return;
   const at = Number(index);
   if (!Number.isInteger(at) || at < 0 || at >= state.queue.length) return;
@@ -958,6 +964,17 @@ test('the row heart is a switcher, and it does not play the row', async () => {
   await panel.element('queue').onclick(rowClick('jump', 1));
   assert.deepEqual(panel.calls.at(-1), { path: '/queue', body: { action: 'jump', index: 1 } });
   assert.equal(panel.calls.filter((call) => call.path === '/taste').length, 2, 'a row click must not like anything');
+});
+
+test('Clear empties the queue around the playing track, rating nothing', async () => {
+  const panel = await bootPanel({ state: queueState() });
+  assert.equal(panel.element('queue-clear').disabled, false);
+
+  await panel.element('queue-clear').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/queue', body: { action: 'clear', keepCurrent: true } });
+  assert.equal(panel.calls.some((call) => call.path === '/taste'), false);
+  assert.deepEqual(panel.state.queue.map((track) => track.id), [1]);
+  assert.equal(panel.element('queue-clear').disabled, true, 'with only the playing track left, there is nothing to clear');
 });
 
 test('the transport row is a switcher too', async () => {

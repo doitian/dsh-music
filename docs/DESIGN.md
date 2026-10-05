@@ -138,6 +138,11 @@ something:
   has already been heard) and rewriting a like into a dislike would be worse
   than missing the signal. Removing the track that is playing also advances
   playback.
+- **Clearing is not a judgement.** The queue header's Clear sends
+  `{action: 'clear', keepCurrent: true}`: everything but the playing track
+  leaves, and nothing is rated. The playing track's play stays open, so it is
+  neither restarted nor reported twice. Without `keepCurrent` the queue empties
+  and playback stops. Either way the DJ, when on, refills it.
 
 ### Listening history
 
@@ -581,7 +586,7 @@ add `config` to the inserted entry:
 | Field | Default | Meaning |
 |---|---|---|
 | `apiPrefix` | `music` | Route prefix. **Changing this also requires editing `BASE` in `lib/client.js`.** |
-| `dataDir` | `$DSH_HOME/music` | Where `session.json` (cookie, history, feedback, settings) lives. |
+| `dataDir` | `$DSH_HOME/music` | Where `session.json` (cookie, history, feedback, settings, queue) lives. |
 | `audioLevel` | `exhigh` | Initial streaming quality, until the player's picker records a choice. One of the levels above; an unknown value falls back to `exhigh`. |
 | `requestTimeoutMs` | `15000` | Per-request deadline for NetEase calls. |
 | `scrobble` | `true` | Report plays to the account's NetEase listening history, until the player's switch makes a choice; see [Listening history](#listening-history). |
@@ -594,6 +599,12 @@ mood brief and the DJ's model route are edited from the panel. The batch size
 default 3 — the DJ tops up when fewer tracks than this remain) have no control
 in the panel: edit them in `session.json` while the harness is stopped, or pass
 `count` to `music_dj` for one batch.
+
+The queue and its cursor are saved too (`queue`), whenever either moves —
+not on every position report — so a restart restores them, paused, without
+waiting on the DJ's first plan. The restored track is not recorded as a new
+play; it was recorded by the run that played it. At most 500 entries are kept:
+played tracks go first, then the furthest upcoming.
 
 ## How it works
 

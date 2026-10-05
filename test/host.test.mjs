@@ -733,6 +733,54 @@ test('a jump is not a judgement about the track', async () => {
   }
 });
 
+test('clearing the queue keeps the playing track and rates nothing', async () => {
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 1 });
+    const cleared = await app.post('/music/api/queue', { action: 'clear', keepCurrent: true });
+    assert.equal(cleared.status, 200);
+    assert.deepEqual(cleared.body.queue.map((track) => track.id), [222]);
+    assert.equal(cleared.body.index, 0);
+    assert.equal(cleared.body.playing, true, 'the playing track plays on');
+    assert.deepEqual(app.readSession().feedback.dislikes, []);
+
+    const emptied = await app.post('/music/api/queue', { action: 'clear' });
+    assert.equal(emptied.body.queue.length, 0, 'without keepCurrent, everything goes');
+    assert.deepEqual(app.readSession().feedback.dislikes, []);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the queue survives a plugin reload, paused at its cursor, without a new play', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-reload-'));
+  try {
+    const first = await mount({ dataDir });
+    await first.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 1 });
+    await first.close();
+    assert.deepEqual(first.readSession().history.map((entry) => entry.id), [222]);
+
+    const second = await mount({ dataDir });
+    let closed = false;
+    try {
+      const state = await second.json('/music/api/state');
+      assert.deepEqual(state.body.queue.map((track) => track.id), TASTE_TRACKS.map((track) => track.id));
+      assert.equal(state.body.current.id, 222);
+      assert.equal(state.body.playing, false, 'a restart never starts playback on its own');
+
+      await second.post('/music/api/queue', { action: 'jump', index: 2 });
+      // Plays are saved on a debounce; closing flushes them.
+      await second.close();
+      closed = true;
+      assert.deepEqual(second.readSession().history.map((entry) => entry.id), [333, 222], 'only a new track is a new play');
+    } finally {
+      if (!closed) await second.close();
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('a removed track can be given back its level', async () => {
   // The two ends of the same level: removing dislikes, and the ✕ switcher
   // clears it — after which the DJ may offer the track again.
