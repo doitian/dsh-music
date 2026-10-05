@@ -632,7 +632,7 @@ down first. A restart brings both halves back into agreement.
 ```powershell
 npm run check        # node --check on every module
 npm test             # 162 deterministic tests: pure, source cache, like state, DJ, browser half
-npm run test:live    # 35 integration tests against the live NetEase API
+npm run test:live    # 36 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -653,7 +653,7 @@ node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, samplin
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 65 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
 node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
-node test/host.test.mjs      # 35 integration: routes, streaming, curation, quality, taste, skips
+node test/host.test.mjs      # 36 integration: routes, streaming, curation, quality, taste, skips
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented

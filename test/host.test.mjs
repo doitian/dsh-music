@@ -877,6 +877,26 @@ test('an early next is a skip, but the dislike button\'s next is only a dislike'
   }
 });
 
+test('a play is recorded once, and queueing a track records no play', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-plays-'));
+  try {
+    const app = await mount({ dataDir });
+    try {
+      await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+      if (!OFFLINE) {
+        // The tool's append resolves ids through NetEase, so it needs the network.
+        await app.harness.tools.get('music_play').execute({ ids: [186016], mode: 'append' });
+      }
+    } finally {
+      await app.close();
+    }
+    const plays = JSON.parse(fs.readFileSync(path.join(dataDir, 'session.json'), 'utf8')).history.map((entry) => entry.id);
+    assert.deepEqual(plays, [111], 'one entry for the track that started, none for one appended behind it');
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('a DJ pick counts as taste only once it is heard through', { skip: OFFLINE }, async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-heard-'));
   try {
