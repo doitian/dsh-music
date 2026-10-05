@@ -471,7 +471,66 @@ test('skips stay counters rather than membership', () => {
   }
 });
 
+test('a skip marks the play it cut short, which then stops counting as affinity', () => {
+  const store = tempStore();
+  try {
+    store.recordPlay({ id: 1, name: 'kept', artists: ['Loved'] });
+    store.recordPlay({ id: 2, name: 'cut', artists: ['Shunned'] });
+    store.recordPlay({ id: 3, name: 'cut again', artists: ['Shunned'] });
+    store.recordSkip(2);
+    store.recordSkip(3);
+    store.recordFeedback('skips', 3);
+
+    assert.deepEqual(store.feedback.skips, [3, 3, 2]);
+    assert.deepEqual(store.topArtists(), ['Loved'], 'a skipped play is not a play');
+
+    const digest = store.tasteDigest();
+    assert.deepEqual([...digest.skipCounts], [[3, 2], [2, 1]]);
+    assert.deepEqual([...digest.skippedArtists], [['Shunned', 2]]);
+    assert.deepEqual(digest.skipped, ['cut again — Shunned', 'cut — Shunned'], 'one line per track, newest first');
+  } finally {
+    store.dispose();
+  }
+});
+
 // ------------------------------------------------------------ player state
+test('a manual next early in a track is a skip, and nothing else is', () => {
+  const player = new Player();
+  const skipped = [];
+  player.onSkip = (track) => skipped.push(track.id);
+  const tracks = [1, 2, 3, 4, 5, 6].map((id) => ({ id, name: `T${id}`, artists: ['A'], duration: 240_000 }));
+  player.setQueue(tracks, { startIndex: 0 });
+  const heard = (position) => player.report({ trackId: player.current().id, position, duration: 240_000 });
+
+  heard(10_000);
+  player.move(1);
+  assert.deepEqual(skipped, [1], 'ten seconds in is a skip');
+
+  heard(45_000);
+  player.move(1);
+  assert.deepEqual(skipped, [1, 2], 'a quarter of a four-minute track is a minute, so 45 s still is');
+
+  heard(90_000);
+  player.move(1);
+  assert.deepEqual(skipped, [1, 2], 'past the window, moving on is not a rejection');
+
+  player.move(1);
+  assert.deepEqual(skipped, [1, 2], 'a track that never reported a position was not heard');
+
+  heard(5_000);
+  player.move(-1);
+  assert.deepEqual(skipped, [1, 2], 'going back is not a skip');
+
+  heard(5_000);
+  player.report({ trackId: player.current().id, ended: true });
+  assert.deepEqual(skipped, [1, 2], 'an automatic advance is not a skip');
+
+  player.setMode('single');
+  heard(5_000);
+  player.move(1);
+  assert.deepEqual(skipped, [1, 2], 'single mode stays on the track, so nothing was left');
+});
+
 test('the player preserves metadata on an already-normalized track', () => {
   const player = new Player();
   const track = normalizeTrack(SEARCH_SHAPE);

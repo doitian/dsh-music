@@ -780,6 +780,79 @@ test('the heuristic batch does not open on the artist it is appended after', asy
   }
 });
 
+/**
+ * Record a play and then a skip of it, as the player does — then push it out
+ * of the recently played window, which would otherwise exclude it on its own.
+ */
+function skipAndForget(store, track, times = 1) {
+  for (let skip = 0; skip < times; skip += 1) {
+    store.recordPlay(track);
+    store.recordSkip(track.id);
+  }
+  for (let filler = 0; filler < 60; filler += 1) {
+    store.recordPlay({ id: 90_000 + filler, name: `filler ${filler}`, artists: [`Filler ${filler}`] });
+  }
+}
+
+test('a track skipped twice leaves the pool; once is only a penalty', async () => {
+  const api = makeApi({
+    simiSongs: async () => [],
+    recommendSongs: async () => [],
+    personalizedNewsongs: async () => [],
+    playlistDetail: async () => ({ tracks: tracksBy(3000, 3, (index) => `C${index}`) }),
+  });
+  const harness = makeDj({ api });
+  try {
+    const [once, twice] = await api.playlistDetail().then((chart) => chart.tracks);
+    harness.store.recordPlay(once);
+    harness.store.recordSkip(once.id);
+    skipAndForget(harness.store, twice, 2);
+
+    const plan = await withoutJitter(() => harness.dj.plan({ count: 3 }));
+    assert.deepEqual(plan.tracks.map((track) => track.id), [3002, 3000], 'the twice-skipped track is gone, the once-skipped one ranks last');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('an often-skipped artist ranks below one never skipped', async () => {
+  const api = makeApi({
+    simiSongs: async () => [],
+    personalizedNewsongs: async () => [],
+    playlistDetail: async () => ({ tracks: tracksBy(3000, 2, 'Shunned') }),
+    recommendSongs: async () => tracksBy(1000, 2, 'Neutral'),
+  });
+  const harness = makeDj({ api });
+  try {
+    skipAndForget(harness.store, { id: 1, name: 'cut', artists: ['Shunned'] });
+    harness.store.recordPlay({ id: 2, name: 'cut too', artists: ['Shunned'] });
+    harness.store.recordSkip(2);
+
+    const plan = await withoutJitter(() => harness.dj.plan({ count: 1 }));
+    assert.equal(plan.tracks[0].artists[0], 'Neutral');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the model is told what the listener skips', async () => {
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    for (const id of [1, 2]) {
+      harness.store.recordPlay({ id, name: `cut ${id}`, artists: ['Shunned'] });
+      harness.store.recordSkip(id);
+    }
+    await harness.dj.plan({ count: 1 });
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /Skipped early \(steer away from these\): cut 2 — Shunned; cut 1 — Shunned/);
+    assert.match(brief, /Often skipped artists \(skips\): Shunned \(2\)/);
+    assert.doesNotMatch(brief, /Favourite artists: .*Shunned/, 'skipped plays do not make a favourite');
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('topUp stocks the queue without touching the transport', async () => {
   const llm = makeLlm({ fail: 'offline' });
   const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });

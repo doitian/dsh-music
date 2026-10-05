@@ -197,6 +197,33 @@ something:
   than missing the signal. Removing the track that is playing also advances
   playback, which a removal otherwise would not.
 
+### Skips
+
+A skip is a fourth, softer signal, and nobody has to press anything for it:
+**moving to the next track before 30 seconds, or before a quarter of the track
+when that is longer**, records one — from the transport row or the agent's
+`music_control next`; jumping to a queue row does not count. It is local, like
+a dislike.
+
+What does *not* count is as deliberate as what does: going back, a track ending
+or failing on its own, single-repeat mode (which stays on the track), and a
+track that never reported a position — paused, blocked by autoplay, or still
+loading — because a track nobody heard was not rejected. Nor does the next
+that the transport row's **✕** presses after a dislike: the dislike is already
+the record, and counting it as a skip too would weigh an early dislike more
+than a later one.
+
+The DJ reads skips at two grains:
+
+- **Per track.** One skip is a penalty, since it may have been the wrong
+  moment rather than the wrong song. A second takes the track out of the pool
+  for good, like a dislike.
+- **Per artist.** The skip marks the play it cut short in the history, and that
+  play stops counting toward the artist's affinity — otherwise abandoning an
+  artist's songs would keep making them a "favourite". Skipped plays then count
+  against the artist instead, and the model is shown the recently skipped
+  tracks and the artists skipped more than once.
+
 ## The AI DJ
 
 The DJ keeps the queue stocked. When the queue drops below
@@ -381,9 +408,11 @@ scores:
 |---|---|
 | matches the mood brief (keyword search) | +3.0 |
 | similar to the current or recent tracks | +0.6 |
-| per artist among the listener's most played | +2.2 |
+| per artist among the listener's most played (skipped plays excluded) | +2.2 |
 | per artist shared with the current track | +1.4 |
-| per artist play count in the last 60 plays | +0.15 each, capped at +1.0 |
+| per artist play count in the last 60 plays, skips excluded | +0.15 each, capped at +1.0 |
+| per artist skip among the last 150 plays | −0.6 each, capped at −2.4 |
+| skipped once (twice excludes it) | −1.5 |
 | VIP-only | −0.4 |
 | jitter, so repeat plans differ | 0–0.8 |
 
@@ -552,8 +581,8 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 125 deterministic tests: pure, like state, DJ, browser half
-npm run test:live    # 33 integration tests against the live NetEase API
+npm test             # 130 deterministic tests: pure, like state, DJ, browser half
+npm run test:live    # 34 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -569,11 +598,11 @@ network cases inside it.
 Or run one file directly:
 
 ```powershell
-node test/netease.test.mjs   # 32 pure: normalisation, quality ladder, likes, cookies, taste, player state
+node test/netease.test.mjs   # 34 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
-node test/dj.test.mjs        # 43 AI DJ: model call identity, route resolution, failure reporting, curation, queue invariants
+node test/dj.test.mjs        # 46 AI DJ: model call identity, route resolution, failure reporting, curation, skips, queue invariants
 node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
-node test/host.test.mjs      # 33 integration: routes, streaming, curation, quality, taste
+node test/host.test.mjs      # 34 integration: routes, streaming, curation, quality, taste, skips
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented

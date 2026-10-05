@@ -849,6 +849,34 @@ test('a taste level replaces the previous one', async () => {
   }
 });
 
+test('an early next is a skip, but the dislike button\'s next is only a dislike', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-skip-'));
+  try {
+    const app = await mount({ dataDir });
+    try {
+      await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+
+      await app.post('/music/api/report', { trackId: 111, position: 5_000, duration: 200_000, playing: true });
+      await app.post('/music/api/control', { action: 'next' });
+
+      // The panel's ✕: the level first, then the same next the transport sends.
+      await app.post('/music/api/report', { trackId: 222, position: 5_000, duration: 200_000, playing: true });
+      await app.post('/music/api/taste', { trackId: 222, level: 'disliked' });
+      const after = await app.post('/music/api/control', { action: 'next' });
+      assert.equal(after.body.current.id, 333);
+    } finally {
+      await app.close();
+    }
+
+    const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'session.json'), 'utf8'));
+    assert.deepEqual(saved.feedback.skips, [111], 'the plain next counts');
+    assert.deepEqual(saved.feedback.dislikes, [222], 'the dislike is the record of the ✕');
+    assert.equal(saved.history.find((entry) => entry.id === 222).skipped, undefined, 'its play is not marked either');
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('an unknown taste level or feedback kind is refused', async () => {
   const app = await mount();
   try {
