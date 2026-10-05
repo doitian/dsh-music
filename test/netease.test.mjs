@@ -531,6 +531,54 @@ test('a manual next early in a track is a skip, and nothing else is', () => {
   assert.deepEqual(skipped, [1, 2], 'single mode stays on the track, so nothing was left');
 });
 
+test('a track is heard through once past the skip window, or at its end, and only once', () => {
+  const player = new Player();
+  const heard = [];
+  player.onHeard = (track) => heard.push(track.id);
+  const tracks = [1, 2, 3, 4].map((id) => ({ id, name: `T${id}`, artists: ['A'], duration: 240_000 }));
+  player.setQueue(tracks, { startIndex: 0 });
+  const at = (position, extra = {}) => player.report({ trackId: player.current().id, position, duration: 240_000, ...extra });
+
+  at(30_000);
+  assert.deepEqual(heard, [], 'inside the window, a minute for a four-minute track');
+  at(61_000);
+  at(120_000);
+  assert.deepEqual(heard, [1], 'past it, once');
+
+  player.move(1);
+  at(5_000, { ended: true });
+  assert.deepEqual(heard, [1, 2], 'a track that ends was heard, however short its report');
+
+  at(10_000);
+  player.move(1);
+  assert.deepEqual(heard, [1, 2], 'a skip is not heard');
+
+  at(0, { error: 'refused' });
+  assert.deepEqual(heard, [1, 2], 'nor is a failure');
+});
+
+test('the player marks who queued a track', () => {
+  const player = new Player();
+  player.setQueue([{ id: 1, name: 'a', artists: ['A'] }], { queuedBy: 'dj' });
+  player.append([{ id: 2, name: 'b', artists: ['B'] }], { queuedBy: 'dj' });
+  player.append([{ id: 3, name: 'c', artists: ['C'] }]);
+  assert.deepEqual(player.queue.map((track) => track.queuedBy), ['dj', 'dj', undefined]);
+});
+
+test('a tentative play counts as played but not as taste, until it is confirmed', () => {
+  const store = tempStore();
+  try {
+    store.recordPlay({ id: 1, name: 'picked', artists: ['DJ Pick'] }, { tentative: true });
+    store.recordPlay({ id: 2, name: 'chosen', artists: ['Chosen'] });
+    assert.deepEqual(store.recentIds(), [2, 1], 'both still avoid a repeat');
+    assert.deepEqual(store.topArtists(), ['Chosen']);
+    store.confirmPlay(1);
+    assert.deepEqual(store.topArtists(), ['Chosen', 'DJ Pick']);
+  } finally {
+    store.dispose();
+  }
+});
+
 test('the player preserves metadata on an already-normalized track', () => {
   const player = new Player();
   const track = normalizeTrack(SEARCH_SHAPE);

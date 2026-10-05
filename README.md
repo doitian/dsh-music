@@ -56,7 +56,9 @@ Music plays in the Harness window, so keep it open. Playback continues while you
 
 Turn it on in the player or with `music_dj`. When fewer than 3 tracks remain, the DJ appends a batch of 5. It only stocks the queue; it never starts or stops playback.
 
-**Where it looks:** songs similar to what you've listened through, personal FM and liked songs you haven't heard in three days (when signed in), the daily recommendations, new songs, and the four main charts. Each source is cached for hours and sampled, so batches vary; requests to NetEase are spaced out rather than sent in a burst.
+**How it learns your taste:** from your NetEase likes, and from songs you hear through. A song the DJ picked counts only once you've listened past the skip window, so its own picks can't teach it what you like.
+
+**Where it looks:** songs similar to what you've heard and liked, personal FM and liked songs you haven't heard in three days (when signed in), the daily recommendations, new songs, and the four main charts. Signed in, the charts and new songs get fewer slots and your own sources more. Each source is cached for hours and sampled, so batches vary; requests to NetEase are spaced out rather than sent in a burst.
 
 **Mood brief.** Type a mood such as `雨天 爵士` or `90s cantopop`. The DJ searches NetEase playlists for it. With a model available, the brief is first rewritten into Chinese search terms, once per brief.
 

@@ -952,10 +952,8 @@ test('personal FM joins the pool for a signed-in account, and outranks similarit
 });
 
 test('liked tracks that have rested come back as marked candidates', async () => {
-  const requested = [];
   const api = makeApi({
     songDetail: async (ids) => {
-      requested.push(...ids);
       return ids.map((id) => ({ id, name: `liked ${id}`, artists: [`L${id}`], duration: 1000 }));
     },
   });
@@ -974,9 +972,9 @@ test('liked tracks that have rested come back as marked candidates', async () =>
     harness.store.state.history.find((entry) => entry.id === 1103).at = Date.now() - 4 * day;
 
     await harness.dj.plan({ count: 1 });
-    assert.deepEqual(requested.sort(), [1101, 1103], 'a like heard yesterday rests; one from four days ago returns');
     const brief = llm.calls[0].messages[0].content[1].text;
-    assert.match(brief, /liked 1101 — L1101 \[liked\]/);
+    const offered = [...brief.matchAll(/liked (\d+) — L\d+ \[liked\]/g)].map((match) => Number(match[1])).sort();
+    assert.deepEqual(offered, [1101, 1103], 'a like heard yesterday rests; one from four days ago returns');
   } finally {
     harness.cleanup();
   }
@@ -1245,6 +1243,95 @@ test('every term gets a playlist, however popular another term is', async () => 
     await harness.dj.plan({ prompt: 'indie', count: 1 });
     const briefPlaylists = loaded.filter((id) => id > 40 && id < 70).sort();
     assert.deepEqual(briefPlaylists, [41, 51, 61]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// ------------------------------------------------- taste beyond the DJ's own picks
+
+test('half the seeds come from likes, so the DJ is not seeded only by its own picks', async () => {
+  const { api, seeds } = seedRecordingApi();
+  const harness = makeDj({ api });
+  try {
+    for (const id of [803, 802, 801]) harness.store.recordPlay({ id, name: `p${id}`, artists: ['P'] });
+    harness.store.setLikedIds([701, 702, 703, 704, 705]);
+    harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1000 }]);
+    await withoutJitter(() => harness.dj.plan({ count: 1 }));
+    assert.deepEqual(seeds.slice(0, 2), [900, 801], 'what is playing, and the latest play heard through');
+    assert.equal(seeds.filter((id) => id >= 700 && id < 800).length, 2, 'and two likes');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('liked artists join the favourites, and the model sees likes never played here', async () => {
+  const api = makeApi({
+    songDetail: async (ids) => ids.map((id) => ({ id, name: `loved ${id}`, artists: ['Loved Abroad'], duration: 1000, picUrl: 'p' })),
+  });
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    for (let play = 0; play < 3; play += 1) harness.store.recordPlay({ id: 600 + play, name: `p${play}`, artists: ['Played Here'] });
+    harness.store.setLikedIds([701, 702]);
+    await harness.dj.plan({ count: 1 });
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /Favourite artists: Loved Abroad, Played Here/, 'two likes (×2) outweigh three plays');
+    assert.match(brief, /Liked: loved 701 — Loved Abroad; loved 702 — Loved Abroad/, 'named although never played here');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('signed in, the charts and new songs give way to the account\'s own sources', async () => {
+  const long = (base, origin) => tracksBy(base, 40, (index) => `${origin}${index}`);
+  const api = makeApi({
+    authenticated: true,
+    recommendSongs: async () => long(10_000, 'Daily'),
+    personalizedNewsongs: async () => long(20_000, 'New'),
+    playlistDetail: async () => ({ tracks: long(30_000, 'Chart') }),
+  });
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    await harness.dj.plan({ count: 1 });
+    const brief = llm.calls[0].messages[0].content[1].text;
+    const count = (origin) => (brief.match(new RegExp(`${origin}\\d+ \\d+`, 'g')) ?? []).length;
+    assert.deepEqual([count('Daily'), count('New'), count('Chart')], [12, 3, 4]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the DJ marks what it queues, so its picks must be heard before they count', async () => {
+  const harness = makeDj({ llm: makeLlm({ fail: 'offline' }), model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.player.dj.enabled = true;
+    await harness.dj.topUp({ force: true });
+    assert.ok(harness.player.queue.every((track) => track.queuedBy === 'dj'), 'top-ups are marked');
+    await harness.dj.start({ count: 2 });
+    assert.ok(harness.player.queue.every((track) => track.queuedBy === 'dj'), 'so is a fresh session');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('an unheard DJ pick never becomes a favourite or a seed', async () => {
+  const { api, seeds } = seedRecordingApi();
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    for (let play = 0; play < 5; play += 1) {
+      harness.store.recordPlay({ id: 600 + play, name: `chart ${play}`, artists: ['Chart Act'] }, { tentative: true });
+    }
+    harness.store.recordPlay({ id: 700, name: 'chosen', artists: ['Chosen'] });
+    await harness.dj.plan({ count: 1 });
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /Favourite artists: Chosen\n/);
+    assert.deepEqual(seeds, [700]);
+
+    harness.store.confirmPlay(604);
+    assert.deepEqual(harness.store.topArtists(), ['Chosen', 'Chart Act'], 'once heard through, it counts');
   } finally {
     harness.cleanup();
   }

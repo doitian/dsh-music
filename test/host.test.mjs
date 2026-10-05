@@ -877,6 +877,38 @@ test('an early next is a skip, but the dislike button\'s next is only a dislike'
   }
 });
 
+test('a DJ pick counts as taste only once it is heard through', { skip: OFFLINE }, async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-heard-'));
+  try {
+    const app = await mount({ dataDir });
+    let first;
+    try {
+      await app.post('/music/api/dj', { enabled: true, replan: true });
+      let state;
+      for (let attempt = 0; attempt < 60 && !(state?.queue?.length > 1); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        state = (await app.json('/music/api/state')).body;
+      }
+      assert.ok(state.queue.length > 1, 'the DJ stocked the queue from the live sources');
+      first = state.current;
+      const entry = () => app.readSession().history.find((play) => play.id === first.id);
+
+      await app.post('/music/api/report', { trackId: first.id, position: 5_000, duration: 200_000, playing: true });
+      // The play itself is flushed on the debounce; force it by reading after a save.
+      await app.post('/music/api/quality', { level: 'exhigh' });
+      assert.equal(entry()?.tentative, true, 'a DJ pick starts out tentative');
+
+      await app.post('/music/api/report', { trackId: first.id, position: 90_000, duration: 200_000, playing: true });
+      await app.post('/music/api/quality', { level: 'exhigh' });
+      assert.equal(entry()?.tentative, undefined, 'heard through, it counts');
+    } finally {
+      await app.close();
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('an unknown taste level or feedback kind is refused', async () => {
   const app = await mount();
   try {

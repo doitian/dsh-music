@@ -147,6 +147,29 @@ that the transport row's **✕** presses after a dislike: the dislike is already
 the record, and counting it as a skip too would weigh an early dislike more
 than a later one.
 
+### Heard through
+
+The other side of a skip. Every track that plays is recorded in the history,
+which the DJ reads its favourites and similarity seeds from — so a track the
+DJ queued itself used to count as approval of itself. On one account, a few
+batches drawn from the charts made Chinese pop the favourites, the favourites
+seeded more of it, and the history ended up 74% Chinese while the account's
+likes were 31%.
+
+A track the DJ queued is therefore marked (`queuedBy: 'dj'`) and recorded as
+**tentative**. It still counts as played, so it is not picked again soon, but
+it counts as taste only once the listener is past the skip window or it ends;
+`Player.onHeard` reports that, once per play. A track the listener or the
+agent chose counts at once. Plays recorded before the marker existed count as
+heard: there is no telling who queued them, so they are left to age out of the
+60- and 150-play windows the taste is read from rather than rewritten.
+
+The likes balance the history. The DJ looks up the newest 200 likes (cached
+per track, 50 per request), counts each liked track's artists twice toward
+the favourites, and shows the model liked songs by name — before, it saw only
+likes that happened to be in the play history, which on that account was 2 of
+119.
+
 The DJ reads skips at two grains:
 
 - **Per track.** One skip is a penalty, since it may have been the wrong
@@ -163,9 +186,9 @@ The DJ reads skips at two grains:
 The DJ keeps the queue stocked. When the queue drops below
 `djAutoExtendBelow`, it gathers candidates and appends a batch:
 
-- similar songs (`simiSong`) for the current track and recent plays the
-  listener heard through — never a disliked or skipped one, and topped up from
-  the likes when the history is thin,
+- similar songs (`simiSong`) seeded half from what is playing and recent
+  plays heard through, half from random likes — never a disliked or skipped
+  track, and each half filling in when the other is thin,
 - personal FM (私人FM), two calls of three tracks, when signed in,
 - up to six liked tracks not played in the last three days, marked `[liked]`
   for the model,
@@ -270,7 +293,11 @@ about as long as it stays the same, per account where it is personal:
 
 **Every plan samples.** Each source contributes a random handful up to its
 quota — similar 14, daily 8, charts 8, new songs 6, likes 6, FM 6, and for a
-brief 15 from its playlists plus 8 from the song search — drawn only from
+brief 15 from its playlists plus 8 from the song search. Signed in, the
+generic feeds give way to the account's own: daily 12, likes 9, charts 4, new
+songs 3. The charts are 80–95% Chinese whatever the listener likes, which is a
+fair default for an anonymous listener and a poor one for an account whose
+daily list says otherwise. Samples are drawn only from
 tracks still eligible, and kept in the source's own order. Taking the first
 few would serve the same tracks until the source changed; sampling a cached
 list yields a different handful every plan for free. It also reaches past
@@ -421,9 +448,9 @@ scores:
 | from personal FM | +1.0 |
 | similar to the current or recent tracks | +0.6 |
 | a rested like | +0.5 |
-| per artist among the listener's most played (skipped plays excluded) | +2.2 |
+| per artist among the favourites — liked tracks' artists (each like counts twice) and plays heard through | +2.2 |
 | per artist shared with the current track | +1.4 |
-| per artist play count in the last 60 plays, skips excluded | +0.15 each, capped at +1.0 |
+| per artist play heard through, in the last 60 plays | +0.15 each, capped at +1.0 |
 | per artist skip among the last 150 plays | −0.6 each, capped at −2.4 |
 | skipped once (twice excludes it) | −1.5 |
 | VIP-only | −0.4 |
@@ -604,8 +631,8 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 154 deterministic tests: pure, source cache, like state, DJ, browser half
-npm run test:live    # 34 integration tests against the live NetEase API
+npm test             # 162 deterministic tests: pure, source cache, like state, DJ, browser half
+npm run test:live    # 35 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -621,12 +648,12 @@ network cases inside it.
 Or run one file directly:
 
 ```powershell
-node test/netease.test.mjs   # 34 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
+node test/netease.test.mjs   # 37 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
 node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, sampling, pacing
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
-node test/dj.test.mjs        # 60 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
+node test/dj.test.mjs        # 65 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
 node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
-node test/host.test.mjs      # 34 integration: routes, streaming, curation, quality, taste, skips
+node test/host.test.mjs      # 35 integration: routes, streaming, curation, quality, taste, skips
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented
