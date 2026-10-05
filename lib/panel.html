@@ -26,6 +26,10 @@
         --accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
         --radius: 12px;
         --gap: 16px;
+        /* The shell's scrollbar colours in its light theme; syncShellScrollbar
+           replaces them with the shell's live ones, which follow its theme. */
+        --scrollbar-thumb: #e5e5e5;
+        --scrollbar-thumb-hover: #d4d4d4;
       }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; }
@@ -53,6 +57,20 @@
       svg.i { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
       svg.i.filled { fill: currentColor; }
       svg.i.small { width: 14px; height: 14px; }
+
+      /* Scrollbars as DSH draws them in its conversation and everywhere else
+         (dsh-client-ui-theme's scrollbar.css): a 5px rounded thumb on no
+         track, darker under the pointer. */
+      @supports not selector(::-webkit-scrollbar) {
+        * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+      }
+      ::-webkit-scrollbar { width: 5px; height: 5px; }
+      ::-webkit-scrollbar-track { background: none; }
+      ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); background-clip: content-box; border-radius: 999px; }
+      ::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+      ::-webkit-scrollbar-corner { background: none; }
+      /* Inside a card, the thumb keeps clear of the rounded corners, as DSH's own cards do. */
+      .card ::-webkit-scrollbar-track { margin-block: 6px; }
 
       /* ------------------------------------------------------------ layout
          Wide: the stage (what is playing) on the left, what comes next — the
@@ -82,8 +100,10 @@
         .side { overflow: hidden; border-left: 1px solid var(--line); }
         .side .queue-card { flex: 1; min-height: 0; }
         .side #queue { overflow: auto; }
-        /* With a column of its own, the details or lyrics fill what the stage leaves. */
-        .stage .info-card { flex: 1; min-height: 160px; }
+        /* With a column of its own, the details or lyrics fill what the stage
+           leaves. The floor is the header and two lines: any higher and a short
+           window scrolls the whole column as well as the card. */
+        .stage .info-card { flex: 1; min-height: 72px; }
         .stage .lyrics, .stage .details { flex: 1; max-height: none; }
       }
 
@@ -801,6 +821,29 @@
       }
 
       /** Follow the shell's language while this page lives inside it. */
+      /**
+       * Take the shell's scrollbar colours, which follow its light or dark
+       * theme, and take them again whenever the shell's root or body changes —
+       * a theme switch is an attribute on one of them.
+       */
+      function syncShellScrollbar() {
+        try {
+          const shell = window.parent?.document;
+          if (!shell?.body || shell === document) return;
+          const copy = () => {
+            const computed = getComputedStyle(shell.body);
+            for (const [from, to] of [['--dsh-scrollbar-thumb', '--scrollbar-thumb'], ['--dsh-scrollbar-thumb-hover', '--scrollbar-thumb-hover']]) {
+              const value = computed.getPropertyValue(from).trim();
+              if (value) document.documentElement.style.setProperty(to, value);
+            }
+          };
+          copy();
+          if (typeof MutationObserver !== 'function') return;
+          const observer = new MutationObserver(copy);
+          for (const node of [shell.documentElement, shell.body]) observer.observe(node, { attributes: true });
+        } catch { /* standalone, or the shell is out of reach */ }
+      }
+
       function watchShellLocale() {
         try {
           const root = window.parent?.document?.documentElement;
@@ -2142,6 +2185,7 @@
       paintStaticIcons();
       applyLocale();
       watchShellLocale();
+      syncShellScrollbar();
       refresh();
       setInterval(refresh, 1500);
       void loadModelPicker();
