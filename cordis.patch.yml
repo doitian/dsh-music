@@ -9,7 +9,8 @@
 #   apiPrefix          route prefix (default `music`) — keep it `music` unless
 #                      you also rebuild the browser half.
 #   dataDir            where session.json lives (default $DSH_HOME/music).
-#   audioLevel         exhigh (320 kbps, default) | standard | higher | lossless
+#   audioLevel         exhigh (320 kbps, default); also standard, higher,
+#                      lossless, hires, jymaster, dolby, sky, jyeffect.
 #   requestTimeoutMs   NetEase request deadline (default 15000).
 #   dj.provider        model route for the AI DJ's model tier, e.g. opencode-go.
 #   dj.model           exact model id, e.g. deepseek-v4.1-flash.
@@ -23,14 +24,17 @@
 #                      conversation.
 #
 # Route resolution, highest first: the player's picker -> `dj.provider`/`dj.model`
-# -> the deployment's own `agent-default-model` (the model the agent loop runs
-# on, which is why "use my session model" needs no configuration) -> discovery,
-# whose first row is arbitrary. The DJ is not an agent and starts none: each
-# plan is one stateless leaf call, so there is no session to rotate or dispose.
+# -> the session's default model (`agent-default-model`, which is why "use my
+# session model" needs no configuration) -> discovery, whose first row is
+# arbitrary. Only the choice of model is shared with the session: the DJ is not
+# an agent and starts none. It makes stateless leaf calls — one to curate each
+# plan, and one to rewrite a mood brief into search terms the first time that
+# brief is seen — so there is no session to rotate or dispose.
 #
-# Without `dj.provider`/`dj.model` the DJ still works: it falls back to scoring
-# similar songs, the daily recommendations and the charts by the listener's
-# liked artists, novelty and feedback.
+# With no model route at all the DJ still works: it scores its candidates —
+# similar songs, personal FM, rested likes, the daily recommendations, the
+# charts and any mood brief — by brief match, artist affinity, and the
+# listener's likes, dislikes and skips.
 - insert:
     - id: music
       name: '@doitian/dsh-music'

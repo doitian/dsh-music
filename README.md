@@ -152,7 +152,7 @@ A track holds one of three taste levels — **liked**, **unrated**, or
 | Control | Level it sets |
 |---|---|
 | the **♡ / ♥** in a queue row, or the heart in the transport row | **liked** — the track goes into the account's 我喜欢的音乐 playlist on NetEase. Clicking the filled heart takes the like back. |
-| the **✕** in the transport row | **disliked** — local, and fed to the DJ, which stops picking the track. Clicking the filled ✕ clears it. |
+| the **✕** in the transport row | **disliked** — local, and fed to the DJ, which stops picking the track — and playback moves on to the next one. Clicking the filled ✕ clears it. |
 | the **✕** on a queue row | **disliked** as well. Taking a track out of the queue is a judgement about the track, not just about the list — without recording it the DJ re-derives the same track from the same similarity and charts within a batch or two. |
 | neither | unrated. |
 
@@ -168,7 +168,7 @@ needs are both plain endpoints:
   cached per track (5 minutes), so a whole queue's hearts cost one request, and
   only tracks with no fresh answer ever cost another.
 
-Four properties are worth knowing, because they are what makes a heart mean
+Five properties are worth knowing, because they are what makes a heart mean
 something:
 
 - **An unknown track is not an unliked one.** A track nobody has asked about has
@@ -182,7 +182,8 @@ something:
   of the account's likes, kept for the DJ's taste digest. It is reconciled with
   the account at startup — one read of the liked playlist — so a like made on
   the phone counts, and a like an earlier build recorded locally (because it had
-  nowhere to send it) does not linger as a phantom.
+  nowhere to send it) does not linger as a phantom. The copy keeps the newest
+  500 likes.
 - **A dislike is local.** The plain web API has no dislike endpoint, so this is
   where the plugin's own taste memory is the only record. Liking and disliking
   are the same three levels rather than two flags: one replaces the other, and
@@ -199,7 +200,7 @@ something:
 
 ### Skips
 
-A skip is a fourth, softer signal, and nobody has to press anything for it:
+A skip is a fourth, softer signal, with no button of its own:
 **moving to the next track before 30 seconds, or before a quarter of the track
 when that is longer**, records one — from the transport row or the agent's
 `music_control next`; jumping to a queue row does not count. It is local, like
@@ -267,6 +268,58 @@ rewrite is tried again after half an hour rather than on every plan. The terms
 used are reported as `searchedAs` on the plan and on `dj.lastPlan`, and the
 `music_dj` result says *Brief searched as: …*.
 
+Then one of two tiers chooses:
+
+- **Model tier** — whenever a model route resolves (a pin, the session's
+  default model, or discovery — see [Choosing the model](#choosing-the-model)),
+  the candidate pool plus a taste digest — recently played, favourite artists,
+  likes, dislikes, skips, what is already queued and which track the picks will
+  follow — goes to the model in one `ctx.llm.stream()` call, and it returns the
+  picks and a one-line vibe. This is the tier that reasons about a mood.
+- **Heuristic tier** — always available: candidates are scored by mood-brief
+  match and artist affinity, then interleaved so consecutive tracks do not
+  share an artist. See [Heuristic tier](#heuristic-tier).
+
+Either way, the pool never holds a track that is disliked, recently played, or
+**already in the queue** — a batch is appended, so a pick the queue already
+holds would be dropped and the batch would come up short. The model is also
+told which track its picks will follow, and is held to the count it was asked
+for.
+
+**Every model call carries a session identity.** The DJ's model calls are leaf
+calls — single requests to the LLM service, outside any agent — and a leaf call
+cannot set headers: `GenerateOptions` has no `headers` field. So `sessionId` is
+the only identity a plugin can give a provider, and each adapter maps it onto
+whatever that provider calls a per-conversation header: pi-ai emits
+`x-opencode-session` for the `opencode-go` route. Without it, a provider that keys on the conversation
+sees an anonymous client ignoring its conventions.
+
+The identity is minted once per install and persisted in `session.json`, so
+every plan and every restart stays inside one conversation; `dj.sessionId` pins
+it explicitly instead. A request with no identity is refused rather than sent
+bare, so the failure is a recorded `dj.modelError` rather than a silent one.
+
+Two other properties are worth knowing:
+
+- **The DJ is not an agent, and does not start one.** It is plugin code that
+  gathers candidates, makes leaf calls — one `ctx.llm.stream()` request in, one
+  answer out — and stocks the queue. A plan
+  makes one such call to curate, plus one to rewrite a brief the first time
+  that brief is seen. Nothing runs through the agent loop: routing the call
+  through a DSH agent would buy conversation memory and an audit trail at the
+  cost of a session lifecycle (rotation, tool masking, disposal).
+- **The model tier is stateless.** Each plan sends its own pool and gets its
+  picks back; there is no accumulated transcript, no context growth and no drift
+  from a previous mood — which is the property, not a limitation, for this job.
+  The only thing kept between calls is a brief's search terms, cached so the
+  rewrite is not repeated.
+
+The model tier is optional and silent on failure; the DJ never blocks playback.
+It only ever **stocks the queue** — it never starts or stops playback, so a
+top-up while paused stays paused, and one that refills an empty queue after the
+last track ended resumes on its own because the desired state was already
+"playing".
+
 ### Caching, sampling and pacing
 
 Most sources change on the scale of hours or days, so each is cached for
@@ -301,51 +354,6 @@ brief sends 14 requests over about 7 s; the next one, mostly from cache,
 sends 2. The DJ stocks the queue before it runs dry, so the wait is not
 heard.
 
-Then one of two tiers chooses:
-
-- **Model tier** — when `dj.provider` and `dj.model` are configured (or a
-  single provider is discoverable), the candidate pool plus a taste digest
-  (recently played, favourite artists, likes, dislikes) goes to
-  `ctx.llm.stream()`, and the model returns the picks and a one-line vibe. This
-  is the tier that reasons about a mood.
-- **Heuristic tier** — always available: candidates are scored by mood-brief
-  match and artist affinity, then interleaved so consecutive tracks do not
-  share an artist. See [Heuristic tier](#heuristic-tier).
-
-Either way, the pool never holds a track that is disliked, recently played, or
-**already in the queue** — a batch is appended, so a pick the queue already
-holds would be dropped and the batch would come up short. The model is also
-told which track its picks will follow, and is held to the count it was asked
-for.
-
-**Every model call carries a session identity.** A leaf call cannot set headers
-— `GenerateOptions` has no `headers` field — so `sessionId` is the only identity
-a plugin can give a provider, and each adapter maps it onto whatever that
-provider calls a per-conversation header: pi-ai emits `x-opencode-session` for
-the `opencode-go` route. Without it, a provider that keys on the conversation
-sees an anonymous client ignoring its conventions.
-
-The identity is minted once per install and persisted in `session.json`, so
-every plan and every restart stays inside one conversation; `dj.sessionId` pins
-it explicitly instead. A request with no identity is refused rather than sent
-bare, so the failure is a recorded `dj.modelError` rather than a silent one.
-
-Two other properties are worth knowing:
-
-- **The DJ is not an agent, and does not start one.** It is plugin code that
-  gathers candidates, makes one model call, and stocks the queue. Routing that
-  call through a DSH agent would buy conversation memory and an audit trail at
-  the cost of a session lifecycle (rotation, tool masking, disposal).
-- **The model tier is stateless.** Each plan sends its own pool and gets its
-  picks back; there is no accumulated transcript, no context growth and no drift
-  from a previous mood — which is the property, not a limitation, for this job.
-
-The model tier is optional and silent on failure; the DJ never blocks playback.
-It only ever **stocks the queue** — it never starts or stops playback, so a
-top-up while paused stays paused, and one that refills an empty queue after the
-last track ended resumes on its own because the desired state was already
-"playing".
-
 ### Choosing the model
 
 **In the player.** The right column carries a **AI DJ 模型 / DJ model**
@@ -366,10 +374,11 @@ Selection precedence, highest first:
 
 1. **the player's saved choice** (`settings.djProvider` / `settings.djModel`)
 2. **the profile patch** (`config.dj.provider` / `config.dj.model`)
-3. **discovery** — the first route, then its first catalogued model
+3. **the session's default model** (`agent-default-model`)
+4. **discovery** — the first route, then its first catalogued model
 
-The source is shown next to the heading: *面板 / panel*, *配置 / profile*, or
-*自动 / auto*. Saving beats the patch deliberately; otherwise a stale patch pin
+The source is shown next to the heading: *面板 / panel*, *配置 / profile*,
+*会话模型 / session model*, or *自动 / auto*. Saving beats the patch deliberately; otherwise a stale patch pin
 would silently override what you just picked. **回退 Revert** is how you hand
 control back to the patch.
 
@@ -389,14 +398,16 @@ adapter route — read them from the `llm-pi-ai` entry's `config.providers` (or
 ask the agent for `ctx.llm.listProviders()`); `model` is any id that route
 accepts.
 
-**Pin it, or follow the session.** With both fields unset the DJ inherits
-`agent-default-model` — the same selection the composer's model picker writes,
-so it is the model the agent loop itself runs on — which is why "use my session
-model" needs no configuration. Pinning `dj.provider`/`dj.model` curates on
-something else instead, and pinning is what makes the two choices independent:
+**Pin it, or follow the session.** With both fields unset the DJ uses the
+session's default model — the `agent-default-model` selection, which the
+composer's model picker writes and new conversations start on — which is why
+"use my session model" needs no configuration. Only the *choice of model* is
+shared: the DJ still calls it with its own leaf calls, never through an agent
+or a conversation. Pinning `dj.provider`/`dj.model` curates on something else
+instead, and pinning is what makes the two choices independent:
 
 ```yaml
-- id: agent-default-model        # the agent loop / session model
+- id: agent-default-model        # the session's default model
   config: { provider: opencode-go, model: deepseek-v4.1-flash }
 - id: music
   config:
@@ -473,7 +484,7 @@ scores:
 
 | Signal | Weight |
 |---|---|
-| matches the mood brief (keyword search) | +3.0 |
+| matches the mood brief (its playlists or song search) | +3.0 |
 | from personal FM | +1.0 |
 | similar to the current or recent tracks | +0.6 |
 | a rested like | +0.5 |
@@ -501,7 +512,7 @@ add `config` to the inserted entry:
     - id: music
       name: '@doitian/dsh-music'
       config:
-        audioLevel: exhigh          # exhigh (320 kbps) | standard | higher | lossless
+        audioLevel: exhigh          # any level under Streaming quality; exhigh is 320 kbps
         dataDir: D:\dsh-data\music  # default $DSH_HOME/music
         requestTimeoutMs: 15000
         dj:
@@ -519,8 +530,12 @@ add `config` to the inserted entry:
 | `dj.provider` / `dj.model` | unset | Model route for the DJ's model tier — see [Choosing the model](#choosing-the-model). Unset, the tier follows `agent-default-model` and only then falls back to discovery; any failure falls back to heuristics. |
 | `dj.sessionId` | minted, persisted | The identity every model call carries. Adapters map it onto the provider's per-conversation header. Pin it to control what a provider sees, or leave it unset and let the DJ mint one per install. |
 
-Player preferences (quality, DJ on/off, mood brief, batch size, extend
-threshold) are persisted in `session.json` and edited from the panel.
+Player preferences are persisted in `session.json`. Quality, DJ on/off, the
+mood brief and the DJ's model route are edited from the panel. The batch size
+(`djBatchSize`, default 5) and the refill threshold (`djAutoExtendBelow`,
+default 3 — the DJ tops up when fewer tracks than this remain) have no control
+in the panel: edit them in `session.json` while the harness is stopped, or pass
+`count` to `music_dj` for one batch.
 
 ## How it works
 
@@ -594,14 +609,19 @@ when something looks wrong:
   "ok": true,
   "prefix": "/music",
   "panelContract": 2,
+  "audio": { "preferred": "exhigh", "last": null },
   "authenticated": true,
   "account": { "nickname": "…", "vip": true },
   "playing": false,
   "queued": 0,
   "tools": ["music_search", "music_play", "music_queue", "music_control",
             "music_dj", "music_now_playing", "music_login"],
-  "dj": { "enabled": false, "model": null, "lastRoute": null,
-          "modelError": null, "lastPlanAt": null, "error": null },
+  "dj": { "enabled": false, "busy": false, "source": null,
+          "model": null, "modelSource": "agent-default", "lastRoute": null,
+          "modelError": null, "pinned": null,
+          "sessionModel": "opencode-go/deepseek-v4.1-flash",
+          "resolvedFrom": null, "sessionId": "music-dj-…",
+          "lastPlanAt": null, "error": null },
   "likes": { "cached": 12, "pending": 0, "error": null },
   "dataDir": "C:\\Users\\…\\.dsh\\music",
   "session": { "authenticated": true, "nickname": "…", "vip": true },
@@ -651,7 +671,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 154 deterministic tests: pure, like state, DJ, browser half
+npm test             # 154 deterministic tests: pure, source cache, like state, DJ, browser half
 npm run test:live    # 34 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -677,10 +697,13 @@ node test/host.test.mjs      # 34 integration: routes, streaming, curation, qual
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented
-chunks, and stub `ctx.agentDefaultModel` for route inheritance. So the
-pinned-route happy path, both chunk spellings (`type`/`kind`), index filtering,
-prose-wrapped JSON, the session identity every call must carry, inheritance from
-the session model, discovery, and every fallback are covered without a provider.
+chunks — answering curation and brief rewrites separately — and stub
+`ctx.agentDefaultModel` for route inheritance. So the pinned-route happy path,
+both chunk spellings (`type`/`kind`), index filtering, prose-wrapped JSON, the
+session identity every call must carry, inheritance from the session model,
+discovery, the brief rewrite and every fallback are covered without a
+provider. NetEase is stubbed too, with a pacer that waits for nothing, so the
+suite never sits out the pacing meant for the real API.
 
 The integration tests mount the plugin against stand-in `tools`/`webServer`
 services and drive the captured route over a real `node:http` server, so they
@@ -765,17 +788,20 @@ workflow, tag, and commit — `npm view @doitian/dsh-music@<version> dist.attest
   a signed-in VIP account — 周杰伦's 晴天 (`id 186016`) is the canonical example,
   because it belongs to a digital album. The plugin surfaces NetEase's own
   refusal (`403` plus a reason) rather than retrying.
-- **No `weapi`/`eapi` encryption**, so scrobbling and playlist writes are not
-  implemented. Liking a track needs none of it — see
+- **No `weapi`/`eapi` encryption**, so scrobbling, playlist writes and
+  heartbeat mode (心动模式) are not available. Liking a track needs none of it — see
   [Likes and taste](#likes-and-taste) — but a *dislike* stays local, because
   there is no plain endpoint for one.
 - **`apiPrefix` must stay `music`** unless `BASE` in `lib/client.js` is changed
   to match.
 - **The DJ's model tier is covered against stub contracts, not a live
   provider** — request building, the session identity, route resolution, both
-  chunk spellings, index filtering and every fallback are tested, but a real
-  end-to-end model call has not been observed here. The heuristic tier is what
-  the live runs exercised.
+  chunk spellings, index filtering, the brief rewrite and every fallback are
+  tested, but a real end-to-end model call has not been observed here: neither
+  curation nor the rewrite of a brief. The heuristic tier is what the live runs
+  exercised, with brief terms supplied by a stub.
+- **Only the newest 500 likes come back as candidates**, because the local copy
+  of the account's likes keeps 500.
 - **The identity only becomes a header on the catalog routes that define one.**
   pi-ai adds `x-opencode-session` for its own `opencode-go`/`opencode` routes. A
   hand-declared route id pointing at the same endpoint gets no wrapper, so the
