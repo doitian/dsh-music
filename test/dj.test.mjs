@@ -853,6 +853,112 @@ test('the model is told what the listener skips', async () => {
   }
 });
 
+/** An api whose similarity source records which tracks it was seeded from. */
+function seedRecordingApi(overrides = {}) {
+  const seeds = [];
+  const api = makeApi({
+    simiSongs: async (id) => {
+      seeds.push(id);
+      return [];
+    },
+    ...overrides,
+  });
+  return { api, seeds };
+}
+
+test('a disliked or skipped track never seeds similarity', async () => {
+  const { api, seeds } = seedRecordingApi();
+  const harness = makeDj({ api });
+  try {
+    harness.store.recordPlay({ id: 803, name: 'enjoyed', artists: ['A'] });
+    harness.store.recordPlay({ id: 802, name: 'skipped', artists: ['B'] });
+    harness.store.recordSkip(802);
+    // The ✕ order: the play is in the history, then the dislike, then next.
+    harness.store.recordPlay({ id: 801, name: 'disliked', artists: ['C'] });
+    harness.store.setTaste(801, 'disliked');
+    harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1000 }]);
+
+    await harness.dj.plan({ count: 1 });
+    assert.deepEqual(seeds, [900, 803]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a thin history is seeded from likes', async () => {
+  const { api, seeds } = seedRecordingApi();
+  const harness = makeDj({ api });
+  try {
+    harness.store.setLikedIds([701, 702]);
+    await harness.dj.plan({ count: 1 });
+    assert.deepEqual(seeds, [701, 702], 'a fresh install still has something to expand');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('personal FM joins the pool for a signed-in account, and outranks similarity', async () => {
+  let calls = 0;
+  const fm = tracksBy(6000, 3, (index) => `FM${index}`);
+  const api = makeApi({
+    authenticated: true,
+    personalFm: async () => {
+      calls += 1;
+      return fm;
+    },
+    recommendSongs: async () => [],
+    personalizedNewsongs: async () => [],
+    playlistDetail: async () => ({ tracks: [] }),
+  });
+  const harness = makeDj({ api });
+  try {
+    harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1000 }]);
+    const plan = await withoutJitter(() => harness.dj.plan({ count: 3 }));
+    assert.equal(calls, 2, 'two calls, because each answers only three');
+    assert.deepEqual(plan.tracks.map((track) => track.id), [6000, 6001, 6002]);
+  } finally {
+    harness.cleanup();
+  }
+
+  const anonymous = makeDj({ api: makeApi({ authenticated: false, personalFm: async () => assert.fail('FM needs a session') }) });
+  try {
+    await anonymous.dj.plan({ count: 1 });
+  } finally {
+    anonymous.cleanup();
+  }
+});
+
+test('liked tracks that have rested come back as marked candidates', async () => {
+  const requested = [];
+  const api = makeApi({
+    songDetail: async (ids) => {
+      requested.push(...ids);
+      return ids.map((id) => ({ id, name: `liked ${id}`, artists: [`L${id}`], duration: 1000 }));
+    },
+  });
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const day = 24 * 60 * 60 * 1000;
+    harness.store.setLikedIds([1101, 1102, 1103]);
+    harness.store.recordPlay({ id: 1102, name: 'liked 1102', artists: ['L'] });
+    harness.store.recordPlay({ id: 1103, name: 'liked 1103', artists: ['L'] });
+    // Past the recent-plays window either way: only the rest period decides.
+    for (let filler = 0; filler < 60; filler += 1) {
+      harness.store.recordPlay({ id: 90_000 + filler, name: `filler ${filler}`, artists: ['F'] });
+    }
+    harness.store.state.history.find((entry) => entry.id === 1102).at = Date.now() - day;
+    harness.store.state.history.find((entry) => entry.id === 1103).at = Date.now() - 4 * day;
+
+    await harness.dj.plan({ count: 1 });
+    assert.deepEqual(requested.sort(), [1101, 1103], 'a like heard yesterday rests; one from four days ago returns');
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /liked 1101 — L1101 \[liked\]/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('topUp stocks the queue without touching the transport', async () => {
   const llm = makeLlm({ fail: 'offline' });
   const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });

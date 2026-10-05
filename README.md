@@ -229,10 +229,20 @@ The DJ reads skips at two grains:
 The DJ keeps the queue stocked. When the queue drops below
 `djAutoExtendBelow`, it gathers candidates and appends a batch:
 
-- similar songs for the current and recently played tracks (`simiSong`),
+- similar songs (`simiSong`) for the current track and recent plays the
+  listener heard through — never a disliked or skipped one, and topped up from
+  the likes when the history is thin,
+- personal FM (私人FM), two calls of three tracks, when signed in,
+- up to six liked tracks not played in the last three days, marked `[liked]`
+  for the model,
 - the daily recommendations and the anonymous new-song feed,
 - the official charts,
 - keyword search for the mood brief.
+
+Personal FM stands in for heartbeat mode (心动模式), which would be the better
+personalised source but answers `code 500` on the plain web API for every seed;
+it needs the `weapi` transport this plugin does not implement. `simiSong`
+answers five tracks whatever `limit` asks for.
 
 Then one of two tiers chooses:
 
@@ -407,7 +417,9 @@ scores:
 | Signal | Weight |
 |---|---|
 | matches the mood brief (keyword search) | +3.0 |
+| from personal FM | +1.0 |
 | similar to the current or recent tracks | +0.6 |
+| a rested like | +0.5 |
 | per artist among the listener's most played (skipped plays excluded) | +2.2 |
 | per artist shared with the current track | +1.4 |
 | per artist play count in the last 60 plays, skips excluded | +0.15 each, capped at +1.0 |
@@ -581,7 +593,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 130 deterministic tests: pure, like state, DJ, browser half
+npm test             # 134 deterministic tests: pure, like state, DJ, browser half
 npm run test:live    # 34 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -600,7 +612,7 @@ Or run one file directly:
 ```powershell
 node test/netease.test.mjs   # 34 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
-node test/dj.test.mjs        # 46 AI DJ: model call identity, route resolution, failure reporting, curation, skips, queue invariants
+node test/dj.test.mjs        # 50 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, queue invariants
 node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
 node test/host.test.mjs      # 34 integration: routes, streaming, curation, quality, taste, skips
 ```
