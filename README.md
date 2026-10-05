@@ -247,11 +247,25 @@ answers five tracks whatever `limit` asks for.
 **A brief finds music through playlists.** A song search only matches titles
 and lyrics, so "rainy afternoon jazz" mostly finds library tracks literally
 named *Rainy Afternoon Jazz*. Listeners name and tag playlists by mood (雨天,
-爵士, 深夜…), so the brief searches playlists, takes the three most played
-among the six most relevant (skipping any under ten tracks), and samples
-across them. Briefs written in Chinese match far better than English ones —
-"90s cantopop" finds 90s hip-hop — because that is the language the playlists
-are named in.
+爵士, 深夜…), so the brief searches playlists, takes the most played among
+the six most relevant (skipping any under ten tracks), and samples across
+them.
+
+**The model rewrites the brief first.** Playlists are named in Chinese, so an
+English brief searched as written matches badly — live, "90s cantopop" found
+Notorious B.I.G. and Eminem. When a model route is available, one call turns
+the brief into up to three Chinese search terms the way listeners name
+playlists (`90年代 粤语金曲`, `港乐 经典`, `粤语老歌`), and the same brief then
+found 张国荣, 刘德华 and 许冠杰. Each term gets its own playlist, so one broad
+term cannot take every slot, and the song search uses the first.
+
+The rewrite is made **once per brief, not per plan**, and kept for a week: a
+brief means the same thing next week. It uses the curation route and the same
+session identity. Without a model, or when the rewrite answers nothing usable,
+the brief is searched as written — the plan never fails over it — and the
+rewrite is tried again after half an hour rather than on every plan. The terms
+used are reported as `searchedAs` on the plan and on `dj.lastPlan`, and the
+`music_dj` result says *Brief searched as: …*.
 
 ### Caching, sampling and pacing
 
@@ -262,6 +276,7 @@ about as long as it stays the same, per account where it is personal:
 |---|---|
 | similar songs (per seed), track details (per id) | 24 h |
 | a playlist's track list | 12 h |
+| a brief's rewrite into search terms | 7 days (30 min after a failed one) |
 | the charts, a brief's searches | 6 h |
 | the daily recommendations | 3 h |
 | the new-song feed | 1 h |
@@ -636,7 +651,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 150 deterministic tests: pure, like state, DJ, browser half
+npm test             # 154 deterministic tests: pure, like state, DJ, browser half
 npm run test:live    # 34 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -656,7 +671,7 @@ Or run one file directly:
 node test/netease.test.mjs   # 34 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
 node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, sampling, pacing
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
-node test/dj.test.mjs        # 56 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, queue invariants
+node test/dj.test.mjs        # 60 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
 node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
 node test/host.test.mjs      # 34 integration: routes, streaming, curation, quality, taste, skips
 ```

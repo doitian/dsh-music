@@ -63,15 +63,28 @@ function makeApi(overrides = {}) {
  * A stub LLM service emitting the documented stream chunks.
  * @see {@link AiDj} — the model tier reads `type`/`kind` and `text`.
  */
-function makeLlm({ reply, fail, kind = 'type', providers, models, chunks } = {}) {
+function makeLlm({ reply, fail, kind = 'type', providers, models, chunks, terms } = {}) {
+  /** Curation calls, in order. */
   const calls = [];
+  /** Brief rewrites, kept apart so a test can still read its curation call at `calls[0]`. */
+  const rewrites = [];
   return {
     calls,
+    rewrites,
     listProviders: () => providers ?? [{ id: 'opencode-go' }, { id: 'xiaomi-token-plan-cn' }],
     listModels: async (provider) =>
       (models ?? { 'opencode-go': [{ id: 'minimax-m3' }, { id: 'deepseek-v4-flash' }], 'xiaomi-token-plan-cn': [{ id: 'qwen3-max' }] })[provider] ?? [],
     stream(options) {
-      calls.push(options);
+      const rewrite = /^Rewrite/.test(options.messages?.[0]?.content?.[0]?.text ?? '');
+      (rewrite ? rewrites : calls).push(options);
+      if (rewrite && !fail) {
+        // With no `terms` the rewrite is unusable, so the brief is searched as written.
+        const answer = JSON.stringify({ terms: terms ?? [] });
+        return (async function* rewritten() {
+          yield { type: 'text-delta', index: 0, text: answer };
+          yield { type: 'finish', reason: { kind: 'stop' } };
+        })();
+      }
       return (async function* emitted() {
         // `chunks` yields a verbatim stream, for asserting on protocol shapes.
         if (chunks) {
@@ -1126,6 +1139,112 @@ test('every NetEase request a plan sends goes through the pacer', async () => {
     await harness.dj.plan({ prompt: 'jazz', count: 1 });
     const sent = Object.values(api.calls).reduce((sum, calls) => sum + calls, 0) + 1;
     assert.equal(paced, sent, `${JSON.stringify(api.calls)} plus the cover lookup`);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// ------------------------------------------------------------- brief rewrite
+
+/** An api whose searches record the terms they were asked for. */
+function searchRecordingApi(overrides = {}) {
+  const searched = { songs: [], playlists: [] };
+  const api = makeApi({
+    searchSongs: async (term) => {
+      searched.songs.push(term);
+      return { tracks: [] };
+    },
+    searchPlaylists: async (term) => {
+      searched.playlists.push(term);
+      return [];
+    },
+    ...overrides,
+  });
+  return { api, searched };
+}
+
+test('a brief is rewritten into search terms once, and searched by them', async () => {
+  const { api, searched } = searchRecordingApi();
+  const llm = makeLlm({ reply: picks(0), terms: ['90年代 粤语金曲', '港乐 经典', '粤语老歌'] });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    const plan = await harness.dj.plan({ prompt: '90s cantopop', count: 1 });
+    assert.deepEqual(plan.searchedAs, ['90年代 粤语金曲', '港乐 经典', '粤语老歌']);
+    assert.deepEqual(searched.playlists, ['90年代 粤语金曲', '港乐 经典', '粤语老歌'], 'every term finds playlists');
+    assert.deepEqual(searched.songs, ['90年代 粤语金曲'], 'the song search takes the first term');
+
+    const rewrite = llm.rewrites[0];
+    assert.equal(rewrite.provider, 'opencode-go', 'the curation route rewrites too');
+    assert.equal(rewrite.sessionId, harness.dj.sessionId, 'and under the same identity');
+    assert.match(rewrite.messages[0].content[1].text, /Brief: 90s cantopop/);
+
+    await harness.dj.plan({ prompt: '90s cantopop', count: 1 });
+    assert.equal(llm.rewrites.length, 1, 'a brief means the same thing on the next plan');
+    assert.equal(llm.calls.length, 2, 'while each plan still curates');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('without a model the brief is searched as written', async () => {
+  const { api, searched } = searchRecordingApi();
+  const harness = makeDj({ api });
+  try {
+    const plan = await harness.dj.plan({ prompt: '雨天 爵士', count: 1 });
+    assert.deepEqual(plan.searchedAs, ['雨天 爵士']);
+    assert.deepEqual(searched.playlists, ['雨天 爵士']);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a rewrite that fails falls back to the brief, and is retried only after a while', async () => {
+  let now = 0;
+  const { api, searched } = searchRecordingApi();
+  const llm = makeLlm({ reply: picks(0) }); // no `terms`: the rewrite is unusable
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' }, now: () => now });
+  try {
+    const plan = await harness.dj.plan({ prompt: 'rainy jazz', count: 1 });
+    assert.equal(plan.source, 'model', 'a failed rewrite never costs the plan');
+    assert.deepEqual(plan.searchedAs, ['rainy jazz']);
+    assert.equal(harness.dj.modelError, null, 'nor does it read as a curation failure');
+
+    await harness.dj.plan({ prompt: 'rainy jazz', count: 1 });
+    assert.equal(llm.rewrites.length, 1, 'not retried on every plan');
+
+    now += 30 * 60 * 1000;
+    await harness.dj.plan({ prompt: 'rainy jazz', count: 1 });
+    assert.equal(llm.rewrites.length, 2, 'retried after half an hour');
+    assert.deepEqual([...new Set(searched.playlists)], ['rainy jazz']);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('every term gets a playlist, however popular another term is', async () => {
+  const listsFor = {
+    热门: [
+      { id: 41, trackCount: 50, playCount: 9e9 },
+      { id: 42, trackCount: 50, playCount: 8e9 },
+      { id: 43, trackCount: 50, playCount: 7e9 },
+    ],
+    小众一: [{ id: 51, trackCount: 50, playCount: 10 }],
+    小众二: [{ id: 61, trackCount: 50, playCount: 20 }],
+  };
+  const loaded = [];
+  const api = makeApi({
+    searchPlaylists: async (term) => listsFor[term] ?? [],
+    playlistDetail: async (id) => {
+      loaded.push(id);
+      return { tracks: tracksBy(id * 1000, 5, `P${id}`) };
+    },
+  });
+  const llm = makeLlm({ reply: picks(0), terms: ['热门', '小众一', '小众二'] });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    await harness.dj.plan({ prompt: 'indie', count: 1 });
+    const briefPlaylists = loaded.filter((id) => id > 40 && id < 70).sort();
+    assert.deepEqual(briefPlaylists, [41, 51, 61]);
   } finally {
     harness.cleanup();
   }
