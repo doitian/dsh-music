@@ -17,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { Pacer } from '../lib/cache.js';
 import { AiDj, curationRequest, curationSessionId } from '../lib/dj.js';
 import { Player } from '../lib/state.js';
 import { SessionStore } from '../lib/session.js';
@@ -103,7 +104,16 @@ function makeLlm({ reply, fail, kind = 'type', providers, models, chunks } = {})
  * `agentDefault` stands in for `ctx.agentDefaultModel.currentSelection()` — the
  * model the agent loop itself runs on, which an unpinned DJ follows.
  */
-function makeDj({ api = makeApi(), llm, model = {}, agentDefault = null, sessionId } = {}) {
+function makeDj({
+  api = makeApi(),
+  llm,
+  model = {},
+  agentDefault = null,
+  sessionId,
+  now,
+  // No gaps by default, so the suite does not wait out a pacing meant for NetEase.
+  pacer = new Pacer({ minGapMs: 0, jitterMs: 0 }),
+} = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-dj-'));
   const store = new SessionStore({ file: path.join(dataDir, 'session.json') });
   store.load();
@@ -118,6 +128,8 @@ function makeDj({ api = makeApi(), llm, model = {}, agentDefault = null, session
     sessionId,
     logger: { info() {}, warn() {}, debug() {} },
     model,
+    now,
+    pacer,
   });
   return { dj, player, store, api, cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
 }
@@ -664,12 +676,10 @@ async function withoutJitter(body) {
 }
 
 const tracksBy = (base, count, artist) =>
-  Array.from({ length: count }, (_, index) => ({
-    id: base + index,
-    name: `${artist} ${index}`,
-    artists: [typeof artist === 'function' ? artist(index) : artist],
-    duration: 180_000,
-  }));
+  Array.from({ length: count }, (_, index) => {
+    const name = typeof artist === 'function' ? artist(index) : artist;
+    return { id: base + index, name: `${name} ${index}`, artists: [name], duration: 180_000 };
+  });
 
 test('queued tracks never reach the pool, so every top-up adds a full batch', async () => {
   // The sources answer the same candidates every time, exactly as similarity
@@ -954,6 +964,168 @@ test('liked tracks that have rested come back as marked candidates', async () =>
     assert.deepEqual(requested.sort(), [1101, 1103], 'a like heard yesterday rests; one from four days ago returns');
     const brief = llm.calls[0].messages[0].content[1].text;
     assert.match(brief, /liked 1101 — L1101 \[liked\]/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+// ------------------------------------------------------- source cache and quotas
+
+/** Wrap every source of an api so each call is counted. */
+function counting(api) {
+  const calls = {};
+  const wrapped = { ...api, calls };
+  for (const name of ['simiSongs', 'searchSongs', 'searchPlaylists', 'recommendSongs', 'personalizedNewsongs', 'playlistDetail', 'songDetail', 'personalFm']) {
+    if (typeof api[name] !== 'function') continue;
+    wrapped[name] = (...args) => {
+      calls[name] = (calls[name] ?? 0) + 1;
+      return api[name](...args);
+    };
+  }
+  return wrapped;
+}
+
+test('each source is fetched once per lifetime, and FM on every plan', async () => {
+  const HOUR = 60 * 60 * 1000;
+  let now = 1_000;
+  const api = counting(makeApi({ authenticated: true, personalFm: async () => [] }));
+  const harness = makeDj({ api, now: () => now });
+  try {
+    harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1000 }]);
+    await harness.dj.plan({ prompt: 'jazz', count: 1 });
+    await harness.dj.plan({ prompt: 'jazz', count: 1 });
+    assert.deepEqual(api.calls, {
+      simiSongs: 1,
+      searchSongs: 1,
+      recommendSongs: 1,
+      personalizedNewsongs: 1,
+      playlistDetail: 4,
+      personalFm: 4,
+    }, 'a second plan refetches only personal FM; the four charts are one fetch each');
+
+    now += 3 * HOUR;
+    await harness.dj.plan({ prompt: 'jazz', count: 1 });
+    assert.equal(api.calls.recommendSongs, 2, 'the daily recommendations live three hours');
+    assert.equal(api.calls.personalizedNewsongs, 2, 'the new-song feed lives one');
+    assert.equal(api.calls.playlistDetail, 4, 'the charts live six');
+    assert.equal(api.calls.simiSongs, 1, 'similarity lives a day');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the personal sources are cached per account', async () => {
+  let cookie = 'first';
+  const api = counting(makeApi({ authenticated: true, jar: { get: () => cookie } }));
+  const harness = makeDj({ api });
+  try {
+    await harness.dj.plan({ count: 1 });
+    cookie = 'second';
+    await harness.dj.plan({ count: 1 });
+    assert.equal(api.calls.recommendSongs, 2, "another sign-in never sees the first one's daily list");
+    assert.equal(api.calls.personalizedNewsongs, 1, 'the anonymous feed is shared');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a long source yields its quota, and a different handful each plan', async () => {
+  const daily = tracksBy(10_000, 100, (index) => `D${index}`);
+  const harness = makeDj({ api: makeApi({ recommendSongs: async () => daily }) });
+  try {
+    const draws = [];
+    for (let plan = 0; plan < 4; plan += 1) {
+      const llm = makeLlm({ reply: picks(0) });
+      harness.dj.resolveLlm = () => llm;
+      harness.dj.setModel({ provider: 'opencode-go', model: 'm' });
+      await harness.dj.plan({ count: 1 });
+      const catalogue = llm.calls[0].messages[0].content[1].text;
+      draws.push((catalogue.match(/D\d+ \d+/g) ?? []).join());
+      assert.equal(catalogue.match(/D\d+ \d+/g)?.length, 8, 'eight daily tracks per plan');
+    }
+    assert.ok(new Set(draws).size > 1, 'the cached list is sampled, not cut at its head');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the first seed keeps all its similar tracks; the others share the rest', async () => {
+  const bySeed = { 900: tracksBy(7000, 5, 'S900'), 801: tracksBy(7100, 5, 'S801'), 802: tracksBy(7200, 5, 'S802'), 803: tracksBy(7300, 5, 'S803') };
+  const harness = makeDj({ api: makeApi({ simiSongs: async (id) => bySeed[id] ?? [] }) });
+  try {
+    for (const id of [803, 802, 801]) harness.store.recordPlay({ id, name: `p${id}`, artists: ['P'] });
+    harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1000 }]);
+    const llm = makeLlm({ reply: picks(0) });
+    harness.dj.resolveLlm = () => llm;
+    harness.dj.setModel({ provider: 'opencode-go', model: 'm' });
+    await harness.dj.plan({ count: 1 });
+    const catalogue = llm.calls[0].messages[0].content[1].text;
+    assert.equal(catalogue.match(/S900 \d/g).length, 5, 'what is playing leads');
+    assert.equal(catalogue.match(/S8\d\d \d/g).length, 9, 'fourteen in all');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a brief draws from its best-loved playlists, past their first twenty tracks', async () => {
+  const resolved = [];
+  const playlist = (id, size) => ({
+    id,
+    // Only the head comes with details, as for a playlist the account does not own.
+    tracks: tracksBy(id * 1000, 20, `M${id}`),
+    trackIds: Array.from({ length: size }, (_, index) => id * 1000 + index),
+  });
+  const api = makeApi({
+    searchPlaylists: async () => [
+      { id: 21, name: 'thin', trackCount: 8, playCount: 9_000_000 },
+      { id: 22, name: 'quiet', trackCount: 100, playCount: 10 },
+      { id: 23, name: 'loved', trackCount: 100, playCount: 5_000_000 },
+      { id: 24, name: 'liked', trackCount: 100, playCount: 2_000_000 },
+      { id: 25, name: 'known', trackCount: 100, playCount: 1_000_000 },
+    ],
+    playlistDetail: async (id) => (id >= 21 && id <= 25 ? playlist(id, 100) : { tracks: [] }),
+    songDetail: async (ids) => {
+      resolved.push(...ids);
+      return ids.map((id) => ({ id, name: `M deep ${id}`, artists: ['Deep'], duration: 1000 }));
+    },
+  });
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    await harness.dj.plan({ prompt: '雨天 爵士', count: 1 });
+    const catalogue = llm.calls[0].messages[0].content[1].text;
+    const sources = new Set([...catalogue.matchAll(/(?:M|M deep )(\d\d)\d{3}/g)].map((match) => Number(match[1])));
+    assert.deepEqual([...sources].sort(), [23, 24, 25], 'the three most played among the relevant, never a thin one');
+    assert.ok(resolved.length > 0 && resolved.every((id) => id % 1000 >= 20), 'only tracks past the head are looked up');
+    assert.match(catalogue, /^0\. M/m, "the brief's playlist tracks lead the catalogue");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('every NetEase request a plan sends goes through the pacer', async () => {
+  let paced = 0;
+  const pacer = { run: (task) => ((paced += 1), task()) };
+  const api = counting(
+    makeApi({
+      authenticated: true,
+      personalFm: async () => [],
+      searchPlaylists: async () => [{ id: 31, trackCount: 40, playCount: 1 }],
+      // A cover is missing, so the cover lookup is a real request too.
+      withCovers: async (tracks) => tracks,
+      recommendSongs: async () => [{ id: 1500, name: 'no cover', artists: ['N'], duration: 1000 }],
+    }),
+  );
+  const harness = makeDj({ api, pacer });
+  try {
+    harness.store.setLikedIds([1101]);
+    api.songDetail = async (ids) => {
+      api.calls.songDetail = (api.calls.songDetail ?? 0) + 1;
+      return ids.map((id) => ({ id, name: `x${id}`, artists: ['X'], duration: 1000, picUrl: 'p' }));
+    };
+    await harness.dj.plan({ prompt: 'jazz', count: 1 });
+    const sent = Object.values(api.calls).reduce((sum, calls) => sum + calls, 0) + 1;
+    assert.equal(paced, sent, `${JSON.stringify(api.calls)} plus the cover lookup`);
   } finally {
     harness.cleanup();
   }

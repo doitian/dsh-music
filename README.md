@@ -236,13 +236,55 @@ The DJ keeps the queue stocked. When the queue drops below
 - up to six liked tracks not played in the last three days, marked `[liked]`
   for the model,
 - the daily recommendations and the anonymous new-song feed,
-- the official charts,
-- keyword search for the mood brief.
+- the four general charts — 飙升榜, 新歌榜, 原创榜, 热歌榜 — sampled together,
+- for a mood brief, its best-loved playlists, and a keyword song search.
 
 Personal FM stands in for heartbeat mode (心动模式), which would be the better
 personalised source but answers `code 500` on the plain web API for every seed;
 it needs the `weapi` transport this plugin does not implement. `simiSong`
 answers five tracks whatever `limit` asks for.
+
+**A brief finds music through playlists.** A song search only matches titles
+and lyrics, so "rainy afternoon jazz" mostly finds library tracks literally
+named *Rainy Afternoon Jazz*. Listeners name and tag playlists by mood (雨天,
+爵士, 深夜…), so the brief searches playlists, takes the three most played
+among the six most relevant (skipping any under ten tracks), and samples
+across them. Briefs written in Chinese match far better than English ones —
+"90s cantopop" finds 90s hip-hop — because that is the language the playlists
+are named in.
+
+### Caching, sampling and pacing
+
+Most sources change on the scale of hours or days, so each is cached for
+about as long as it stays the same, per account where it is personal:
+
+| Source | Kept for |
+|---|---|
+| similar songs (per seed), track details (per id) | 24 h |
+| a playlist's track list | 12 h |
+| the charts, a brief's searches | 6 h |
+| the daily recommendations | 3 h |
+| the new-song feed | 1 h |
+| personal FM | never — every call answers a different three |
+
+**Every plan samples.** Each source contributes a random handful up to its
+quota — similar 14, daily 8, charts 8, new songs 6, likes 6, FM 6, and for a
+brief 15 from its playlists plus 8 from the song search — drawn only from
+tracks still eligible, and kept in the source's own order. Taking the first
+few would serve the same tracks until the source changed; sampling a cached
+list yields a different handful every plan for free. It also reaches past
+what NetEase sends in full: for a playlist the account does not own, only
+the first 20 tracks come with details, but every id does, so the DJ samples
+ids from the whole list and looks up just the ones it chose. The quotas also
+keep any one source from crowding the others out of the pool.
+
+**Requests are paced, not fired as a burst.** Each request starts a random
+0.25–0.75 s after the previous one, so a plan reads like someone clicking
+through the app rather than a crawler. Only the DJ's own probing is paced;
+searches and plays you ask for go out at once. Live, a first plan with a
+brief sends 14 requests over about 7 s; the next one, mostly from cache,
+sends 2. The DJ stocks the queue before it runs dry, so the wait is not
+heard.
 
 Then one of two tiers chooses:
 
@@ -483,6 +525,7 @@ browser (DSH web GUI, http://127.0.0.1:<port>)
                           ├─ lib/session.js   cookie store + QR login state machine
                           ├─ lib/state.js     queue, cursor, transport revisions
                           ├─ lib/dj.js        candidate pool + model/heuristic tiers
+                          ├─ lib/cache.js     source cache, pool sampling, request pacing
                           ├─ lib/likes.js     the account's like state, cached
                           └─ lib/router.js    JSON API, HTML, Range-capable audio proxy
 ```
@@ -593,7 +636,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 134 deterministic tests: pure, like state, DJ, browser half
+npm test             # 150 deterministic tests: pure, like state, DJ, browser half
 npm run test:live    # 34 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -611,8 +654,9 @@ Or run one file directly:
 
 ```powershell
 node test/netease.test.mjs   # 34 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
+node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, sampling, pacing
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
-node test/dj.test.mjs        # 50 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, queue invariants
+node test/dj.test.mjs        # 56 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, queue invariants
 node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
 node test/host.test.mjs      # 34 integration: routes, streaming, curation, quality, taste, skips
 ```
@@ -647,7 +691,7 @@ poll, and a track change replaces the pane. Two more cover the pane's shape: it
 is capped to a few lines, collapses to its header on demand, and remembers that
 choice across loads — while still fetching the lines, so expanding is instant.
 
-`npm test` runs the four deterministic files in sequence (`npm run test:all`
+`npm test` runs the five deterministic files in sequence (`npm run test:all`
 adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which
 is blocked in sandboxed environments.
 
