@@ -139,6 +139,43 @@ something:
   than missing the signal. Removing the track that is playing also advances
   playback.
 
+### Listening history
+
+Plays reach the account's listening history — 最近播放 and 听歌排行, on every
+device, marked as web plays — because the plugin reports them the way the web
+player does. `lib/scrobble.js` sends `startplay` when a track starts (its
+first reported position) and `play` when that play ends, with the seconds
+heard and how it ended: `ui` when it played out, `interrupt` when the
+listener moved on. A play left inside the skip window is not reported at all.
+The Player's `onStart` and `onFinish` hooks mark the two moments, and every
+way a play can end — finishing, failing, a skip, a jump, the queue replaced or
+cleared — closes it; a single-repeat loop is a play of its own. It runs only
+signed in, `config.scrobble: false` turns it off, a failure never reaches
+playback, and `/music/health` shows `scrobble.last`.
+
+Getting there took several wrong turns, worth keeping so nobody repeats them:
+
+- **`music.163.com/api/feedback/weblog` accepts anything and records
+  nothing.** It answers `{"code":200,"data":"success"}` even to an empty
+  request, so a "successful" scrobble proves nothing. The weapi form of the
+  same path behaves the same.
+- **The web player logs to another host:** `clientlogusf.music.163.com`,
+  found by hooking the page's own encryption function (`window.asrsea`) to
+  read each request body before it is encrypted.
+- **The desktop-client cookies break it.** The plugin's session carries
+  `os=pc; appver=…; channel=…`, which mark a request as the desktop app; a
+  web-style play log carrying them is accepted and dropped. `Netease#weblog`
+  sends the session without them.
+- **The body is the web player's, field for field:**
+  `{"action":"play","json":{"type":"song","wifi":0,"download":0,"id":…,"time":<seconds>,"end":"ui","mainsite":"1","mainsiteWeb":"1","content":"id=<song id>"}}`,
+  after a `startplay` of `{"id":…,"type":"song","content":"id=…","mainsite":"1","mainsiteWeb":"1"}`.
+  Older references omit `mainsiteWeb` and send a playlist as `sourceId`.
+
+With all of that, a play reached 最近播放 within 15–20 seconds. The encryption
+is `lib/weapi.js`: the JSON body AES-128-CBC encrypted with a fixed key, then
+again with a random 16-character key, which is reversed and RSA-encrypted
+without padding under NetEase's published public key.
+
 ### Skips
 
 A skip is a fourth, softer signal, with no button of its own:
@@ -207,7 +244,7 @@ The DJ keeps the queue stocked. When the queue drops below
 
 Personal FM stands in for heartbeat mode (心动模式), which would be the better
 personalised source but answers `code 500` on the plain web API for every seed;
-it needs the `weapi` transport this plugin does not implement. `simiSong`
+the plugin's weapi transport (`lib/weapi.js`, used for play logs) was not tried on it. `simiSong`
 answers five tracks whatever `limit` asks for.
 
 **A brief finds music through playlists.** A song search only matches titles
@@ -531,6 +568,7 @@ add `config` to the inserted entry:
 | `dataDir` | `$DSH_HOME/music` | Where `session.json` (cookie, history, feedback, settings) lives. |
 | `audioLevel` | `exhigh` | Initial streaming quality, until the player's picker records a choice. One of the levels above; an unknown value falls back to `exhigh`. |
 | `requestTimeoutMs` | `15000` | Per-request deadline for NetEase calls. |
+| `scrobble` | `true` | Report plays to the account's NetEase listening history; see [Listening history](#listening-history). |
 | `dj.provider` / `dj.model` | unset | Model route for the DJ's model tier — see [Choosing the model](#choosing-the-model). Unset, the tier follows `agent-default-model` and only then falls back to discovery; any failure falls back to heuristics. |
 | `dj.sessionId` | minted, persisted | The identity every model call carries. Adapters map it onto the provider's per-conversation header. Pin it to control what a provider sees, or leave it unset and let the DJ mint one per install. |
 
@@ -555,7 +593,9 @@ browser (DSH web GUI, http://127.0.0.1:<port>)
                                       /music/stream/<id>    (audio bytes)
                                             │
                         host plugin  ───────┘
-                          ├─ lib/netease.js   NetEase web API (no weapi encryption)
+                          ├─ lib/netease.js   NetEase web API, plain endpoints wherever they work
+                          ├─ lib/weapi.js     weapi encryption, for the play logs
+                          ├─ lib/scrobble.js  reports plays to the listening history
                           ├─ lib/session.js   cookie store + QR login state machine
                           ├─ lib/state.js     queue, cursor, transport revisions
                           ├─ lib/dj.js        candidate pool + model/heuristic tiers
@@ -675,8 +715,8 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 176 deterministic tests: pure, source cache, like state, DJ, browser half
-npm run test:live    # 38 integration tests against the live NetEase API
+npm test             # 187 deterministic tests: pure, source cache, like state, DJ, browser half
+npm run test:live    # 39 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -692,12 +732,13 @@ network cases inside it.
 Or run one file directly:
 
 ```powershell
-node test/netease.test.mjs   # 39 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
+node test/netease.test.mjs   # 40 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
 node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, sampling, pacing
+node test/scrobble.test.mjs  # 10 scrobbling: weapi encryption, the play-log request, what is reported
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 73 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
 node test/client.test.mjs    # 42 browser half: the engine against a fake DOM, and the page it pairs with
-node test/host.test.mjs      # 38 integration: routes, streaming, curation, quality, taste, skips
+node test/host.test.mjs      # 39 integration: routes, streaming, curation, quality, taste, skips
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented
@@ -733,7 +774,7 @@ poll, and a track change replaces the pane. Two more cover the pane's shape: it
 is capped to a few lines, collapses to its header on demand, and remembers that
 choice across loads — while still fetching the lines, so expanding is instant.
 
-`npm test` runs the five deterministic files in sequence (`npm run test:all`
+`npm test` runs the six deterministic files in sequence (`npm run test:all`
 adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which
 is blocked in sandboxed environments.
 

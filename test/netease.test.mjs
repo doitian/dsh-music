@@ -557,6 +557,47 @@ test('a track is heard through once past the skip window, or at its end, and onl
   assert.deepEqual(heard, [1, 2], 'nor is a failure');
 });
 
+test('each play opens once it is really playing, and closes however it ends', () => {
+  const player = new Player();
+  const events = [];
+  player.onStart = (track) => events.push(['start', track.id]);
+  player.onFinish = (track, play) => events.push(['finish', track.id, Math.round(play.seconds), play.ended, play.heard]);
+  const tracks = [1, 2, 3, 4].map((id) => ({ id, name: `T${id}`, artists: ['A'], duration: 200_000 }));
+  player.setQueue(tracks, { startIndex: 0 });
+  const at = (position, extra = {}) => player.report({ trackId: player.current().id, position, duration: 200_000, ...extra });
+
+  at(0);
+  assert.deepEqual(events, [], 'a track that has not played a moment has not started');
+  at(1_000);
+  at(80_000);
+  at(120_000, { ended: true });
+  assert.deepEqual(events, [['start', 1], ['finish', 1, 200, true, true]], 'played out: ended, its full length');
+
+  at(10_000);
+  player.move(1);
+  assert.deepEqual(events.slice(2), [['start', 2], ['finish', 2, 10, false, false]], 'skipped: closed, not heard');
+
+  at(90_000);
+  player.jump(0);
+  assert.deepEqual(events.slice(4), [['start', 3], ['finish', 3, 90, false, true]], 'left after the window: heard, interrupted');
+
+  player.jump(1);
+  assert.deepEqual(events.slice(6), [], 'a track that never started is never closed');
+
+  player.setMode('single');
+  at(5_000);
+  at(60_000, { ended: true });
+  at(3_000);
+  assert.deepEqual(
+    events.slice(6),
+    [['start', 2], ['finish', 2, 200, true, true], ['start', 2]],
+    'a repeat is a play of its own',
+  );
+
+  player.clear();
+  assert.deepEqual(events.at(-1), ['finish', 2, 3, false, false], 'clearing closes the play too');
+});
+
 test('the player marks who queued a track', () => {
   const player = new Player();
   player.setQueue([{ id: 1, name: 'a', artists: ['A'] }], { queuedBy: 'dj' });

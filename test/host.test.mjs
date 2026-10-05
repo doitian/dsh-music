@@ -880,6 +880,24 @@ test('an early next is a skip; disliking the playing track moves on without one'
   }
 });
 
+test('health reports scrobbling, on by default and off with the switch', async () => {
+  const on = await mount();
+  try {
+    const health = await on.json('/music/health');
+    assert.equal(health.body.scrobble.enabled, true, 'on unless switched off');
+    assert.equal(health.body.scrobble.active, false, 'but idle without a session');
+    assert.equal(health.body.scrobble.last, null);
+  } finally {
+    await on.close();
+  }
+  const off = await mount({ config: { scrobble: false } });
+  try {
+    assert.equal((await off.json('/music/health')).body.scrobble.enabled, false);
+  } finally {
+    await off.close();
+  }
+});
+
 test('a boost is set, shown, cleared and refused over the route', async () => {
   const app = await mount();
   try {

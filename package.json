@@ -40,6 +40,8 @@
     "lib/state.js",
     "lib/dj.js",
     "lib/cache.js",
+    "lib/weapi.js",
+    "lib/scrobble.js",
     "lib/likes.js",
     "lib/router.js",
     "lib/panel.html",
@@ -55,8 +57,8 @@
     "access": "public"
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/client.js && node --check lib/netease.js && node --check lib/session.js && node --check lib/state.js && node --check lib/dj.js && node --check lib/cache.js && node --check lib/likes.js && node --check lib/router.js",
-    "test": "node test/netease.test.mjs && node test/cache.test.mjs && node test/likes.test.mjs && node test/dj.test.mjs && node test/client.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/client.js && node --check lib/netease.js && node --check lib/session.js && node --check lib/state.js && node --check lib/dj.js && node --check lib/cache.js && node --check lib/weapi.js && node --check lib/scrobble.js && node --check lib/likes.js && node --check lib/router.js",
+    "test": "node test/netease.test.mjs && node test/cache.test.mjs && node test/scrobble.test.mjs && node test/likes.test.mjs && node test/dj.test.mjs && node test/client.test.mjs",
     "probe:headers": "node scripts/probe-headers.mjs",
     "test:live": "node test/host.test.mjs",
     "test:all": "npm test && npm run test:live"
