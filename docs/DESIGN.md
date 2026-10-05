@@ -285,6 +285,40 @@ top-up while paused stays paused, and one that refills an empty queue after the
 last track ended resumes on its own because the desired state was already
 "playing".
 
+### Boosts
+
+A boost is a temporary push — "more like this" or "fewer like this" for one
+track — that expires on its own, by default after an hour. It is for a mood,
+not a judgement: a like or dislike is a standing preference the DJ keeps
+learning from, and a passing wish for more of one sound should not become
+one. Boosts live in `session.json` with their end time (`boosts`, newest
+first, one per track, at most 10), so a restart inside the hour keeps them;
+expired ones are simply not read. `POST /music/api/boost` sets or clears one
+(`direction: more | less | none`, optional `minutes`, 5–720), and `music_dj`
+takes `boost`, `boostTrackId` (the playing track by default) and
+`boostMinutes`.
+
+What "like this track" means is the track's similar songs — or, for a track
+NetEase has none for (晴天 is one), its first artist's songs, so a boost is
+never silently a no-op — together with its artists.
+
+- **More.** The track seeds similarity ahead of the regular seeds (up to two
+  boosts), and its neighbours are kept whole rather than sampled. Candidates
+  near it are marked `[more]` for the model, which is told to favour them,
+  and score +3.0 in the heuristic tier — as much as the mood brief, since
+  both are the listener saying what they want now.
+- **Less.** The track never seeds and is kept out of the pool; candidates
+  near it are marked `[fewer]`, which the model is told to avoid unless
+  nothing else fits, and score −3.0. A candidate near both is treated as
+  `less`.
+
+A boost is also felt at once rather than a batch or two later, but only
+while the DJ is on — with it off, the queue is the listener's alone. **More**
+queues three of the track's neighbours straight after the current one, as DJ
+picks (so they count as taste only once heard through). **Less** removes the
+DJ's own upcoming picks that are near it; a track the listener queued, and
+the one playing, are never touched.
+
 ### Caching, sampling and pacing
 
 Most sources change on the scale of hours or days, so each is cached for
@@ -462,6 +496,7 @@ scores:
 | per artist play heard through, in the last 60 plays | +0.15 each, capped at +1.0 |
 | per artist skip among the last 150 plays | −0.6 each, capped at −2.4 |
 | skipped once (twice excludes it) | −1.5 |
+| near a "more" / "less" boost | +3.0 / −3.0 |
 | VIP-only | −0.4 |
 | jitter, so repeat plans differ | 0–0.8 |
 
@@ -640,8 +675,8 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 164 deterministic tests: pure, source cache, like state, DJ, browser half
-npm run test:live    # 36 integration tests against the live NetEase API
+npm test             # 176 deterministic tests: pure, source cache, like state, DJ, browser half
+npm run test:live    # 38 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -657,12 +692,12 @@ network cases inside it.
 Or run one file directly:
 
 ```powershell
-node test/netease.test.mjs   # 38 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
+node test/netease.test.mjs   # 39 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
 node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, sampling, pacing
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
-node test/dj.test.mjs        # 65 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
-node test/client.test.mjs    # 39 browser half: the engine against a fake DOM, and the page it pairs with
-node test/host.test.mjs      # 36 integration: routes, streaming, curation, quality, taste, skips
+node test/dj.test.mjs        # 73 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
+node test/client.test.mjs    # 42 browser half: the engine against a fake DOM, and the page it pairs with
+node test/host.test.mjs      # 38 integration: routes, streaming, curation, quality, taste, skips
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented

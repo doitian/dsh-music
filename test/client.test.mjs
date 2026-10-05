@@ -701,6 +701,17 @@ function applyTaste(state, trackId, level) {
   }
 }
 
+/** Mirror a boost onto the fake state, as the host's `/boost` route does. */
+function applyBoost(state, trackId, direction) {
+  const boost = direction === 'none' ? null : direction;
+  for (const track of [state.current, ...(state.queue ?? [])]) {
+    if (track?.id === trackId) track.boost = boost;
+  }
+  const named = (state.queue ?? []).find((track) => track.id === trackId);
+  state.boosts = (state.boosts ?? []).filter((entry) => entry.id !== trackId);
+  if (boost) state.boosts.unshift({ id: trackId, name: named?.name ?? '', artists: named?.artists ?? [], direction: boost, until: Date.now() + 60 * 60_000 });
+}
+
 /**
  * Mirror one queue action onto the fake state, the way the host's `/queue` route
  * does.
@@ -783,6 +794,10 @@ async function bootPanel(options = {}) {
     } else if (path === '/taste') {
       const { trackId, level } = calls.at(-1).body;
       applyTaste(state, trackId, level);
+      body = state;
+    } else if (path === '/boost') {
+      const { trackId, direction } = calls.at(-1).body;
+      applyBoost(state, trackId, direction);
       body = state;
     } else if (path === '/dj/models') body = { routes: [], selected: {}, configured: {}, source: 'auto' };
     else if (path === '/quality') body = { levels: [] };
@@ -956,6 +971,42 @@ test('the transport row is a switcher too', async () => {
   await panel.element('like').onclick();
   assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'liked' } });
   assert.equal(panel.element('like').textContent, '♥');
+});
+
+test('the arrows boost the playing track, and a filled arrow clears it', async () => {
+  const panel = await bootPanel({ state: queueState({ currentId: 1 }) });
+  await panel.element('boost-more').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/boost', body: { trackId: 1, direction: 'more' } });
+  assert.equal(panel.element('boost-more').classList.contains('on'), true, 'the arrow fills');
+  assert.equal(panel.element('boost-more').title, 'Clear this boost', 'and says what a second click does');
+  assert.equal(panel.element('toast').textContent, 'More like this for the next hour');
+
+  await panel.element('boost-more').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/boost', body: { trackId: 1, direction: 'none' } });
+  assert.equal(panel.element('boost-more').classList.contains('on'), false);
+
+  await panel.element('boost-less').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/boost', body: { trackId: 1, direction: 'less' } });
+  assert.equal(panel.element('boost-less').classList.contains('on'), true);
+  assert.equal(panel.element('boost-more').classList.contains('on'), false, 'one direction at a time');
+});
+
+test('the boosts in force are listed with their time left, and each can be ended', async () => {
+  const state = queueState({ currentId: 1 });
+  state.boosts = [{ id: 2, name: 'T2', artists: ['A'], direction: 'less', until: Date.now() + 42 * 60_000 }];
+  const panel = await bootPanel({ state });
+  const html = panel.element('boosts').innerHTML;
+  assert.match(html, /▼ T2 · 4[12] min/, 'direction, track and minutes left');
+
+  await panel.element('boosts').onclick({ target: { closest: (asked) => (asked === '[data-unboost]' ? { dataset: { unboost: '2' } } : null) } });
+  assert.deepEqual(panel.calls.at(-1), { path: '/boost', body: { trackId: 2, direction: 'none' } });
+  assert.equal(panel.element('boosts').innerHTML, '', 'nothing left to list');
+});
+
+test('the boost labels follow the shell language', async () => {
+  const panel = await bootPanel({ state: queueState({ currentId: 1 }), lang: 'zh-CN' });
+  assert.equal(panel.element('boost-more').title, '接下来一小时多放类似的');
+  assert.equal(panel.element('boost-less').title, '接下来一小时少放类似的');
 });
 
 test('a dislike takes the playing track out of the queue, in one request', async () => {

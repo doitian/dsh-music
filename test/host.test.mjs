@@ -880,6 +880,46 @@ test('an early next is a skip; disliking the playing track moves on without one'
   }
 });
 
+test('a boost is set, shown, cleared and refused over the route', async () => {
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    const boosted = await app.post('/music/api/boost', { trackId: 222, direction: 'more' });
+    assert.equal(boosted.status, 200);
+    assert.equal(boosted.body.queue[1].boost, 'more', 'the row carries it');
+    assert.equal(boosted.body.current.boost, null, 'and only that row');
+    assert.deepEqual(boosted.body.boosts.map((boost) => [boost.id, boost.direction, boost.name]), [[222, 'more', 'Second']]);
+    assert.ok(boosted.body.boosts[0].until > Date.now() + 59 * 60_000, 'for an hour');
+
+    const cleared = await app.post('/music/api/boost', { trackId: 222, direction: 'none' });
+    assert.equal(cleared.body.queue[1].boost, null);
+    assert.deepEqual(cleared.body.boosts, []);
+
+    const sideways = await app.post('/music/api/boost', { trackId: 222, direction: 'sideways' });
+    assert.equal(sideways.status, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('music_dj boosts the playing track by default, and reports the boosts in force', async () => {
+  const app = await mount();
+  try {
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    const tool = app.harness.tools.get('music_dj');
+    const result = await tool.execute({ boost: 'less', boostMinutes: 30 });
+    assert.equal(result.boostError, null);
+    assert.deepEqual([result.boosted.direction, result.boosted.name, result.boosted.minutes], ['less', 'First', 30]);
+    assert.deepEqual(result.boosts.map((boost) => boost.id), [111]);
+    assert.match(tool.output.render({}, result)[0].text, /Boost: fewer songs like First for 30 min/);
+
+    const unknown = await tool.execute({ boost: 'more', boostTrackId: 'x' });
+    assert.match(unknown.boostError, /invalid track id/);
+  } finally {
+    await app.close();
+  }
+});
+
 test('a play is recorded once, and queueing a track records no play', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-plays-'));
   try {

@@ -32,7 +32,7 @@ Click **登录 Sign in** in the player and scan the QR code with the NetEase Clo
 | `music_play` | Queue and play, by ids or a search query |
 | `music_queue` | Show, append, insert, replace, remove, jump, clear |
 | `music_control` | Play, pause, next, previous, seek, volume, mute, mode |
-| `music_dj` | Run or configure the AI DJ, with an optional mood brief |
+| `music_dj` | Run or configure the AI DJ, with an optional mood brief or a temporary boost |
 | `music_now_playing` | What is playing and next, and whether you're signed in |
 | `music_login` | Status, QR, poll, set a cookie, log out |
 
@@ -59,6 +59,8 @@ Turn it on in the player or with `music_dj`. When fewer than 3 tracks remain, th
 **How it learns your taste:** from your NetEase likes, and from songs you hear through. A song the DJ picked counts only once you've listened past the skip window, so its own picks can't teach it what you like.
 
 **Where it looks:** songs similar to what you've heard and liked, personal FM and liked songs you haven't heard in three days (when signed in), the daily recommendations, new songs, and the four main charts. Signed in, the charts and new songs get fewer slots and your own sources more. Each source is cached for hours and sampled, so batches vary; requests to NetEase are spaced out rather than sent in a burst.
+
+**Boosts.** Want more songs like the one playing for a while, or fewer, without a lasting like or dislike? Press **▲** (more like this) or **▼** (fewer like this) in the transport row. A boost lasts an hour, then expires on its own. While the DJ is on, **▲** also queues a few similar songs right after the current one, and **▼** takes the DJ's upcoming picks that are like it out of the queue (songs you queued yourself stay). Active boosts are listed under the queue with their time left; press ✕ on one, or the filled arrow, to end it early. The agent can set them too, for any length from 5 minutes to 12 hours.
 
 **Mood brief.** Type a mood such as `雨天 爵士` or `90s cantopop`. The DJ searches NetEase playlists for it. With a model available, the brief is first rewritten into Chinese search terms, once per brief.
 

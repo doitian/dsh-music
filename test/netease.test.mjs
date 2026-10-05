@@ -579,6 +579,30 @@ test('a tentative play counts as played but not as taste, until it is confirmed'
   }
 });
 
+test('a boost lasts its span, replaces the track\'s previous one, and can be cleared', () => {
+  const store = tempStore();
+  try {
+    const track = { id: 7, name: 'Seven', artists: ['S'] };
+    const boost = store.setBoost(track, 'more');
+    assert.equal(boost.direction, 'more');
+    assert.ok(Math.abs(boost.until - Date.now() - 60 * 60_000) < 1_000, 'an hour by default');
+    assert.equal(store.boostOf(7), 'more');
+
+    store.setBoost(track, 'less', 30);
+    assert.equal(store.activeBoosts().length, 1, 'one boost per track');
+    assert.equal(store.boostOf(7), 'less');
+    assert.equal(store.boostOf(7, Date.now() + 31 * 60_000), null, 'and it expires on its own');
+
+    assert.equal(store.setBoost(track, 'sideways'), null);
+    assert.equal(store.boostOf(7), null, 'anything but more or less clears it');
+
+    assert.ok(store.setBoost(track, 'more', 1).until - Date.now() >= 5 * 60_000 - 1_000, 'at least five minutes');
+    assert.ok(store.setBoost(track, 'more', 10_000).until - Date.now() <= 12 * 60 * 60_000, 'at most twelve hours');
+  } finally {
+    store.dispose();
+  }
+});
+
 test('the player preserves metadata on an already-normalized track', () => {
   const player = new Player();
   const track = normalizeTrack(SEARCH_SHAPE);

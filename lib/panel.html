@@ -103,12 +103,39 @@
       .controls .grow { flex: 1; }
       .icon { font-size: 15px; line-height: 1; }
       /* A filled heart means the track is liked on the account. */
-      #like.on, #dislike.on {
+      #like.on, #dislike.on, #boost-more.on, #boost-less.on {
         color: #fff;
         background: var(--accent);
         border-color: var(--accent);
       }
       #volume { flex: 0 0 88px; }
+      /* A card like the DJ status above it and the model card below, so the
+         three stack on one edge with one rhythm. */
+      #boosts:empty { display: none; }
+      #boosts {
+        margin: 0 14px 12px;
+        padding: 7px 11px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      #boosts .boost {
+        display: inline-flex;
+        gap: 2px;
+        align-items: center;
+        color: var(--fg);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 1px 2px 1px 8px;
+      }
+      #boosts .boost button { border: 0; background: none; padding: 0 5px; min-width: 0; cursor: pointer; color: var(--muted); }
+      #boosts .boost button:hover { color: var(--fg); }
       .mode { font-size: 12px; }
       /* The trip to NetEase is not instant on a cold cache; a click has to look
          like it landed before the rows come back. */
@@ -210,6 +237,8 @@
                    script owns text and title rather than data-i18n. -->
               <button id="like" title="Like">♡</button>
               <button id="dislike" title="Dislike">✕</button>
+              <button id="boost-more" title="More like this for an hour">▲</button>
+              <button id="boost-less" title="Fewer like this for an hour">▼</button>
               <button id="mute" data-i18n-title="mute" title="Mute">🔊</button>
               <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
             </div>
@@ -226,6 +255,7 @@
           <div class="section-title"><span data-i18n="queue">Queue</span> <span id="counts"></span></div>
           <div class="queue"><div class="scroll" id="queue"></div></div>
           <div id="dj-status"></div>
+          <div id="boosts"></div>
 
           <div class="dj-status" id="dj-model">
             <!-- One always-visible line: the setting that matters at a glance is
@@ -364,6 +394,14 @@
           liked: '已喜欢',
           unliked: '已取消喜欢',
           disliked: '不再推荐',
+          boostMore: '接下来一小时多放类似的',
+          boostLess: '接下来一小时少放类似的',
+          boostClear: '取消临时偏好',
+          boostedMore: '接下来一小时多放类似的',
+          boostedLess: '接下来一小时少放类似的',
+          boostCleared: '已取消临时偏好',
+          boostsTitle: '临时偏好',
+          boostMinutes: '{n} 分钟',
           djOn: 'AI DJ 已开启',
           djOff: 'AI DJ 已关闭',
           connectFailed: '连接失败：',
@@ -453,6 +491,14 @@
           liked: 'Liked',
           unliked: 'Like removed',
           disliked: 'Disliked',
+          boostMore: 'More like this for an hour',
+          boostLess: 'Fewer like this for an hour',
+          boostClear: 'Clear this boost',
+          boostedMore: 'More like this for the next hour',
+          boostedLess: 'Fewer like this for the next hour',
+          boostCleared: 'Boost cleared',
+          boostsTitle: 'Boosts',
+          boostMinutes: '{n} min',
           djOn: 'AI DJ on',
           djOff: 'AI DJ off',
           connectFailed: 'Cannot reach the host: ',
@@ -987,6 +1033,46 @@
         $('like').title = t(liked ? 'unlike' : 'like');
         $('dislike').classList.toggle('on', disliked);
         $('dislike').title = t(disliked ? 'undislike' : 'dislike');
+        // A filled arrow is the boost in force; clicking it clears the boost.
+        const boost = track?.boost ?? null;
+        $('boost-more').classList.toggle('on', boost === 'more');
+        $('boost-more').title = t(boost === 'more' ? 'boostClear' : 'boostMore');
+        $('boost-less').classList.toggle('on', boost === 'less');
+        $('boost-less').title = t(boost === 'less' ? 'boostClear' : 'boostLess');
+        paintBoosts();
+      }
+
+      /**
+       * The boosts in force, each with its time left and a ✕ to end it early —
+       * so a temporary push is never invisible, and never outlives the mood.
+       */
+      function paintBoosts() {
+        const boosts = state?.boosts ?? [];
+        const now = Date.now();
+        $('boosts').innerHTML = boosts.length
+          ? `<span>${esc(t('boostsTitle'))}:</span>` +
+            boosts
+              .map((boost) => {
+                const minutes = Math.max(Math.round((boost.until - now) / 60_000), 1);
+                return `<span class="boost">${boost.direction === 'more' ? '▲' : '▼'} ${esc(boost.name)} · ${esc(t('boostMinutes', { n: minutes }))}<button data-unboost="${boost.id}" title="${esc(t('boostClear'))}">✕</button></span>`;
+              })
+              .join('')
+          : '';
+      }
+
+      /** Boost a track, or clear its boost with `none`, and adopt the host's answer. */
+      async function sendBoost(trackId, direction, button) {
+        if (button) button.disabled = true;
+        try {
+          state = await api('/boost', { method: 'POST', body: { trackId, direction } });
+          render();
+          applyTransport();
+          toast(t(direction === 'more' ? 'boostedMore' : direction === 'less' ? 'boostedLess' : 'boostCleared'));
+        } catch (error) {
+          toast(failureText(error));
+        } finally {
+          if (button) button.disabled = false;
+        }
       }
 
       /**
@@ -1554,6 +1640,19 @@
         // The host takes a disliked track out of the queue, and moves on when it
         // was playing; pressing next here as well would skip a second track.
         if (await sendTaste(track, 'disliked', event?.currentTarget)) toast(t('disliked'));
+      };
+
+      // Both boost buttons are switchers too: the filled one clears its boost.
+      for (const direction of ['more', 'less']) {
+        $(`boost-${direction}`).onclick = (event) => {
+          const track = state?.current;
+          if (!track) return;
+          return sendBoost(track.id, track.boost === direction ? 'none' : direction, event?.currentTarget);
+        };
+      }
+      $('boosts').onclick = (event) => {
+        const target = event.target?.closest?.('[data-unboost]');
+        if (target) return sendBoost(Number(target.dataset.unboost), 'none', target);
       };
 
       $('dj-toggle').onclick = async () => {

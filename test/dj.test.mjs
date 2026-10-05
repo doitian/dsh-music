@@ -1343,6 +1343,160 @@ test('an unheard DJ pick never becomes a favourite or a seed', async () => {
   }
 });
 
+// --------------------------------------------------------------------- boosts
+
+/** Similar lists by seed: every boost reference has its own neighbourhood. */
+function boostApi(overrides = {}) {
+  const near = {
+    800: tracksBy(8000, 5, (index) => `More${index}`),
+    810: tracksBy(8100, 5, (index) => `Less${index}`),
+  };
+  const seeds = [];
+  const api = makeApi({
+    simiSongs: async (id) => {
+      seeds.push(id);
+      return near[id] ?? [];
+    },
+    ...overrides,
+  });
+  return { api, seeds, near };
+}
+
+test('a "more" boost seeds first, and its similar songs lead the pool', async () => {
+  const { api, seeds } = boostApi();
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.store.setBoost({ id: 800, name: 'Ref', artists: ['RefArtist'] }, 'more');
+    harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1000 }]);
+    await harness.dj.plan({ count: 1 });
+    assert.equal(seeds[0], 800, 'the boosted track seeds before what is playing');
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.match(brief, /Right now, more like: Ref — RefArtist/);
+    assert.equal((brief.match(/More\d \d — More\d \[more\]/g) ?? []).length, 5, 'all of its neighbours are candidates, marked');
+    assert.match(llm.calls[0].messages[0].content[0].text, /favour candidates marked \[more\]/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a "less" boost never seeds, even as the track playing', async () => {
+  const { api } = boostApi();
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.store.setBoost({ id: 810, name: 'Ref', artists: ['Shunned'] }, 'less');
+    harness.player.setQueue([{ id: 810, name: 'Ref', artists: ['Shunned'], duration: 1000 }]);
+    await harness.dj.plan({ count: 1 });
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.doesNotMatch(brief, /Less\d/, 'its neighbours are looked up to be avoided, never offered');
+    assert.match(brief, /Right now, fewer like: Ref — Shunned/);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a "less" boost marks its neighbours, and the heuristic ranks them last', async () => {
+  const { api } = boostApi({ recommendSongs: async () => tracksBy(8100, 5, (index) => `Less${index}`) });
+  const llm = makeLlm({ reply: picks(0) });
+  const harness = makeDj({ api, llm, model: { provider: 'opencode-go', model: 'm' } });
+  try {
+    harness.store.setBoost({ id: 810, name: 'Ref', artists: ['Shunned'] }, 'less');
+    await harness.dj.plan({ count: 1 });
+    const brief = llm.calls[0].messages[0].content[1].text;
+    assert.equal((brief.match(/Less\d \d — Less\d \[fewer\]/g) ?? []).length, 5);
+
+    harness.dj.resolveLlm = () => undefined;
+    const plan = await withoutJitter(() => harness.dj.plan({ count: 3 }));
+    assert.ok(plan.tracks.every((track) => !track.name.startsWith('Less')), `ranked last: ${plan.tracks.map((track) => track.name)}`);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('an expired boost changes nothing', async () => {
+  const { api, seeds } = boostApi();
+  const harness = makeDj({ api });
+  try {
+    harness.store.setBoost({ id: 800, name: 'Ref', artists: ['R'] }, 'more', 5);
+    harness.store.state.boosts[0].until = Date.now() - 1;
+    await harness.dj.plan({ count: 1 });
+    assert.equal(seeds.includes(800), false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a fresh "more" boost queues songs like it straight after the current one', async () => {
+  const { api } = boostApi();
+  const harness = makeDj({ api });
+  try {
+    harness.player.dj.enabled = true;
+    harness.player.setQueue([
+      { id: 900, name: 'now', artists: ['D'], duration: 1000 },
+      { id: 901, name: 'later', artists: ['E'], duration: 1000 },
+    ]);
+    const effect = await withoutJitter(() => harness.dj.applyBoost({ id: 800, artists: ['RefArtist'] }, 'more'));
+    assert.equal(effect.queued, 3);
+    assert.deepEqual(harness.player.queue.map((track) => track.id), [900, 8000, 8001, 8002, 901]);
+    assert.ok(harness.player.queue.slice(1, 4).every((track) => track.queuedBy === 'dj'), 'they are DJ picks, heard before they count');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a fresh "less" boost drops the DJ\'s own upcoming picks like it, nothing else', async () => {
+  const { api } = boostApi();
+  const harness = makeDj({ api });
+  try {
+    harness.player.dj.enabled = true;
+    harness.player.setQueue([{ id: 8100, name: 'playing, and near', artists: ['Less0'], duration: 1 }]);
+    harness.player.append([{ id: 8101, name: 'near', artists: ['Less1'], duration: 1 }], { queuedBy: 'dj' });
+    harness.player.append([{ id: 8102, name: 'near, but chosen', artists: ['Less2'], duration: 1 }]);
+    harness.player.append([{ id: 950, name: 'same artist', artists: ['Shunned'], duration: 1 }], { queuedBy: 'dj' });
+    harness.player.append([{ id: 951, name: 'unrelated', artists: ['Other'], duration: 1 }], { queuedBy: 'dj' });
+    const effect = await harness.dj.applyBoost({ id: 810, artists: ['Shunned'] }, 'less');
+    assert.equal(effect.removed, 2);
+    assert.deepEqual(harness.player.queue.map((track) => track.id), [8100, 8102, 951]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('a boosted track NetEase knows no similar songs for falls back to its artist', async () => {
+  // 晴天 is one: simiSong answers nothing for it, which made the boost a no-op.
+  const searched = [];
+  const { api } = boostApi({
+    searchSongs: async (term) => {
+      searched.push(term);
+      return { tracks: [...tracksBy(8200, 3, () => 'Jay'), ...tracksBy(8300, 2, () => 'Someone Else')] };
+    },
+  });
+  const harness = makeDj({ api });
+  try {
+    harness.player.dj.enabled = true;
+    harness.player.setQueue([{ id: 820, name: 'no neighbours', artists: ['Jay'], duration: 1 }]);
+    const effect = await withoutJitter(() => harness.dj.applyBoost({ id: 820, artists: ['Jay'] }, 'more'));
+    assert.deepEqual(searched, ['Jay']);
+    assert.equal(effect.queued, 3);
+    assert.ok(harness.player.queue.slice(1).every((track) => track.artists.includes('Jay')), 'only the artist\'s own songs');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('with the DJ off, a boost leaves the queue alone', async () => {
+  const { api } = boostApi();
+  const harness = makeDj({ api });
+  try {
+    harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1000 }]);
+    assert.deepEqual(await harness.dj.applyBoost({ id: 800, artists: [] }, 'more'), { queued: 0, removed: 0 });
+    assert.equal(harness.player.queue.length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('topUp stocks the queue without touching the transport', async () => {
   const llm = makeLlm({ fail: 'offline' });
   const harness = makeDj({ llm, model: { provider: 'opencode-go', model: 'm' } });
