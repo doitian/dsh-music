@@ -1485,6 +1485,90 @@ test('a boosted track NetEase knows no similar songs for falls back to its artis
   }
 });
 
+// ------------------------------------------------------------------ steers
+
+/** A playing track, two unplayed DJ picks and one the listener queued. */
+function steeredQueue(harness) {
+  harness.player.dj.enabled = true;
+  harness.player.setQueue([{ id: 900, name: 'now', artists: ['D'], duration: 1 }]);
+  harness.player.append(
+    [
+      { id: 901, name: 'old pick', artists: ['E'], duration: 1 },
+      { id: 902, name: 'old pick', artists: ['F'], duration: 1 },
+    ],
+    { queuedBy: 'dj' },
+  );
+  harness.player.append([{ id: 903, name: 'chosen', artists: ['G'], duration: 1 }]);
+}
+
+test('the first plan after a mood change replaces the unplayed DJ picks', async () => {
+  const harness = makeDj();
+  try {
+    steeredQueue(harness);
+    harness.dj.setPrompt('rainy jazz');
+    const plan = await harness.dj.topUp({ force: true });
+    assert.deepEqual(
+      harness.player.queue.map((track) => track.id),
+      [900, 903, ...plan.tracks.map((track) => track.id)],
+      'the playing track and the listener\'s own stay',
+    );
+
+    await harness.dj.topUp({ force: true });
+    assert.equal(harness.player.queue.length, 2 + plan.tracks.length * 2, 'the next plan only appends');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the same mood brief again is not a change', async () => {
+  const harness = makeDj();
+  try {
+    harness.store.updateSettings({ djPrompt: 'rainy jazz' });
+    steeredQueue(harness);
+    harness.dj.setPrompt(' rainy jazz');
+    const plan = await harness.dj.topUp({ force: true });
+    assert.equal(harness.player.queue.length, 4 + plan.tracks.length);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('the first plan after a boost replaces the unplayed DJ picks, but not the boost\'s own', async () => {
+  for (const direction of ['more', 'less']) {
+    const { api } = boostApi();
+    const harness = makeDj({ api });
+    try {
+      steeredQueue(harness);
+      await withoutJitter(() => harness.dj.applyBoost({ id: 800, artists: ['RefArtist'] }, direction));
+      const before = harness.player.queue.map((track) => track.id);
+      const plan = await harness.dj.topUp({ force: true });
+      assert.deepEqual(
+        harness.player.queue.map((track) => track.id),
+        [...before.filter((id) => id !== 901 && id !== 902), ...plan.tracks.map((track) => track.id)],
+        direction,
+      );
+    } finally {
+      harness.cleanup();
+    }
+  }
+});
+
+test('a plan begun before a steer lands, and is replaced by the next one', async () => {
+  const harness = makeDj();
+  try {
+    steeredQueue(harness);
+    const inFlight = harness.dj.topUp({ force: true });
+    harness.dj.setPrompt('rainy jazz');
+    const early = await inFlight;
+    assert.equal(harness.player.queue.length, 4 + early.tracks.length, 'nothing is replaced by a plan of the old mood');
+
+    const plan = await harness.dj.topUp({ force: true });
+    assert.deepEqual(harness.player.queue.map((track) => track.id), [900, 903, ...plan.tracks.map((track) => track.id)]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('with the DJ off, a boost leaves the queue alone', async () => {
   const { api } = boostApi();
   const harness = makeDj({ api });

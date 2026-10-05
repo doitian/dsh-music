@@ -68,6 +68,8 @@ Turn it on with the switch in the player's AI DJ card, or with `music_dj`. When 
 
 **Mood brief.** Type a mood in the AI DJ card, such as `雨天 爵士` or `90s cantopop`. The DJ searches NetEase playlists for it. With a model available, the brief is first rewritten into Chinese search terms, once per brief.
 
+After you change the mood or set a boost, the DJ's next batch replaces its own picks that haven't played yet, so the new direction starts right away. The song playing and songs you queued yourself stay.
+
 **Who chooses:**
 
 - **Model tier:** a model picks from the candidates by your taste and the mood, and writes a one-line vibe. It calls the model directly; it is not an agent and starts no conversation.

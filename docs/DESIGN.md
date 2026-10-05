@@ -361,6 +361,17 @@ picks (so they count as taste only once heard through). **Less** removes the
 DJ's own upcoming picks that are near it; a track the listener queued, and
 the one playing, are never touched.
 
+### Steers
+
+A new mood brief, or a boost either way, is a steer: the DJ's upcoming picks
+were chosen the old way. The first plan to land after a steer removes those
+that are still unplayed before it appends, so the new direction plays next
+rather than after the old queue runs out. The playing track, tracks the
+listener queued, and the neighbours a "more" boost just queued all stay. A
+plan already in flight when the steer comes was itself chosen the old way: it
+lands without replacing anything, and the next plan replaces it too. Setting
+the same brief again (ignoring surrounding spaces) is not a steer.
+
 ### Caching, sampling and pacing
 
 Most sources change on the scale of hours or days, so each is cached for
