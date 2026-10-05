@@ -750,27 +750,30 @@ test('a removed track can be given back its level', async () => {
   }
 });
 
-test('every queued track carries its taste, and a dislike is durable', async () => {
+test('a dislike takes the track out of the queue, and is durable', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-taste-'));
   try {
     const app = await mount({ dataDir });
-    const played = await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
-    assert.deepEqual(
-      played.body.queue.map((track) => [track.liked, track.disliked]),
-      [[false, false], [false, false], [false, false]],
-      'nothing is rated yet',
-    );
+    try {
+      const played = await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+      assert.deepEqual(
+        played.body.queue.map((track) => [track.liked, track.disliked]),
+        [[false, false], [false, false], [false, false]],
+        'nothing is rated yet',
+      );
 
-    const disliked = await app.post('/music/api/taste', { trackId: 222, level: 'disliked' });
-    assert.equal(disliked.status, 200);
-    assert.equal(disliked.body.queue[1].disliked, true, 'the list can see it');
-    assert.equal(disliked.body.queue[1].liked, false);
-    assert.equal(disliked.body.current.disliked, false, 'and only that track changed');
+      const disliked = await app.post('/music/api/taste', { trackId: 222, level: 'disliked' });
+      assert.equal(disliked.status, 200);
+      assert.deepEqual(disliked.body.queue.map((track) => track.id), [111, 333], 'the disliked track left the queue');
+      assert.equal(disliked.body.current.id, 111, 'and what is playing did not change');
+    } finally {
+      await app.close();
+    }
 
     // The level is a stored preference, not a display flag: a restart keeps it.
-    await app.close();
     const second = await mount({ dataDir });
     try {
+      // Queued again on purpose, a disliked track stays — and shows its level.
       const again = await second.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
       assert.equal(again.body.queue[1].disliked, true, 'the DJ reads the same list, so it must survive');
       assert.deepEqual(second.readSession().feedback.dislikes, [222]);
@@ -824,18 +827,17 @@ test('a taste level replaces the previous one', async () => {
       await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
 
       const disliked = await app.post('/music/api/feedback', { kind: 'dislikes', trackId: 333 });
-      assert.equal(disliked.body.queue[2].disliked, true, 'the older feedback door still works');
+      assert.deepEqual(disliked.body.queue.map((track) => track.id), [111, 222], 'the older feedback door removes it too');
       assert.deepEqual(app.readSession().feedback.dislikes, [333], 'a taste level is written through, not debounced');
 
       // Clicking the same control again clears the level rather than restating it.
-      const cleared = await app.post('/music/api/feedback', { kind: 'dislikes', trackId: 333 });
-      assert.equal(cleared.body.queue[2].disliked, false);
+      await app.post('/music/api/feedback', { kind: 'dislikes', trackId: 333 });
       assert.deepEqual(app.readSession().feedback.dislikes, []);
 
       // A skip is counted rather than rated, and it changes no heart.
-      const skipped = await app.post('/music/api/feedback', { kind: 'skips', trackId: 333 });
+      const skipped = await app.post('/music/api/feedback', { kind: 'skips', trackId: 222 });
       assert.equal(skipped.status, 200);
-      assert.equal(skipped.body.queue[2].disliked, false);
+      assert.equal(skipped.body.queue[1].disliked, false);
     } finally {
       await app.close();
     }
@@ -843,13 +845,13 @@ test('a taste level replaces the previous one', async () => {
     // Skips are debounced — they are frequent — so the unload flush is what
     // lands them, which is the path a real shutdown takes.
     const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'session.json'), 'utf8'));
-    assert.deepEqual(saved.feedback.skips, [333]);
+    assert.deepEqual(saved.feedback.skips, [222]);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
-test('an early next is a skip, but the dislike button\'s next is only a dislike', async () => {
+test('an early next is a skip; disliking the playing track moves on without one', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-skip-'));
   try {
     const app = await mount({ dataDir });
@@ -859,11 +861,12 @@ test('an early next is a skip, but the dislike button\'s next is only a dislike'
       await app.post('/music/api/report', { trackId: 111, position: 5_000, duration: 200_000, playing: true });
       await app.post('/music/api/control', { action: 'next' });
 
-      // The panel's ✕: the level first, then the same next the transport sends.
+      // The panel's ✕ sends the level alone; the host removes the track and
+      // moves on, so no next is pressed and no skip recorded.
       await app.post('/music/api/report', { trackId: 222, position: 5_000, duration: 200_000, playing: true });
-      await app.post('/music/api/taste', { trackId: 222, level: 'disliked' });
-      const after = await app.post('/music/api/control', { action: 'next' });
-      assert.equal(after.body.current.id, 333);
+      const after = await app.post('/music/api/taste', { trackId: 222, level: 'disliked' });
+      assert.equal(after.body.current.id, 333, 'playback moved on');
+      assert.deepEqual(after.body.queue.map((track) => track.id), [111, 333], 'and the track is gone');
     } finally {
       await app.close();
     }

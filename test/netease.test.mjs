@@ -717,6 +717,19 @@ test('removing a queue position reports what left', () => {
   assert.equal(nowhere.snapshot.queue.length, 0);
 });
 
+test('removing the playing track moves on, and past the end wraps to the start', () => {
+  const player = new Player();
+  player.setQueue([1, 2, 3, 4].map((id) => ({ id, name: `T${id}`, artists: ['A'], duration: 1000 })));
+  player.jump(1);
+  player.remove(1);
+  assert.equal(player.current().id, 3, 'the next track takes its place');
+
+  player.jump(2);
+  player.remove(2);
+  assert.equal(player.current().id, 1, 'the last one wraps to the start, as next does, rather than going back');
+  assert.equal(player.pendingSeek, 0, 'and starts from the top');
+});
+
 test('clearing the queue resets the cursor and transport', () => {
   const player = new Player();
   player.setQueue([{ id: 1, name: 'A', artists: ['X'], duration: 1 }]);

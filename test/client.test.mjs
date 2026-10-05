@@ -694,6 +694,11 @@ function applyTaste(state, trackId, level) {
     track.liked = level === 'liked';
     track.disliked = level === 'disliked';
   }
+  // As the host does: a disliked track leaves the queue, the playing one too.
+  if (level === 'disliked') {
+    const index = (state.queue ?? []).findIndex((track) => track.id === trackId);
+    if (index >= 0) applyQueueAction(state, { action: 'remove', index });
+  }
 }
 
 /**
@@ -712,7 +717,7 @@ function applyQueueAction(state, { action, index } = {}) {
   state.queue.splice(at, 1);
   if (at < state.index) state.index -= 1;
   else if (at === state.index) {
-    state.index = Math.min(state.index, state.queue.length - 1);
+    if (state.index >= state.queue.length) state.index = state.queue.length === 0 ? -1 : 0;
     state.current = state.queue[state.index] ?? null;
   }
 }
@@ -953,16 +958,31 @@ test('the transport row is a switcher too', async () => {
   assert.equal(panel.element('like').textContent, '♥');
 });
 
-test('a dislike is the third level, and it skips the track', async () => {
+test('a dislike takes the playing track out of the queue, in one request', async () => {
   const panel = await bootPanel({ state: queueState({ currentId: 1 }) });
   await panel.element('dislike').onclick();
-  assert.deepEqual(panel.calls.at(-2), { path: '/taste', body: { trackId: 1, level: 'disliked' } });
-  assert.deepEqual(panel.calls.at(-1), { path: '/control', body: { action: 'next' } }, 'a disliked track is skipped');
-  assert.equal(panel.state.current.disliked, true);
+  assert.deepEqual(
+    panel.calls.filter((call) => call.path === '/taste'),
+    [{ path: '/taste', body: { trackId: 1, level: 'disliked' } }],
+  );
+  assert.equal(
+    panel.calls.some((call) => call.path === '/control'),
+    false,
+    'the host moves on; pressing next as well would skip a second track',
+  );
+  assert.equal(panel.element('toast').textContent, 'Disliked');
+  assert.deepEqual(panel.state.queue.map((track) => track.id), [2], 'the disliked track left the queue');
+  assert.equal(panel.state.current.id, 2, 'and playback moved to the next one');
+  assert.doesNotMatch(panel.element('queue').innerHTML, /T1/);
+});
 
-  // Clicking the filled ✕ takes the level back and stays on the track.
+test('a disliked track queued again on purpose shows the level, and the ✕ clears it', async () => {
+  // Disliking removes a track; queueing it again afterwards is the listener's
+  // own choice, so it stays, drawn as disliked, and the filled ✕ takes it back.
+  const panel = await bootPanel({ state: queueState({ currentId: 1, disliked: [1] }) });
   await panel.element('dislike').onclick();
   assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'none' } });
+  assert.equal(panel.state.current.id, 1, 'clearing a dislike stays on the track');
   assert.equal(panel.state.current.disliked, false);
 });
 

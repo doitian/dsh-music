@@ -47,10 +47,10 @@ Music plays in the Harness window, so keep it open. Playback continues while you
 | Control | Effect |
 |---|---|
 | ♡ (row or transport) | Like on your NetEase account. Click again to unlike. |
-| ✕ (transport) | Dislike and move to the next track. Local only; the DJ stops picking it. |
+| ✕ (transport) | Dislike: the track leaves the queue, and the next one plays. Local only; the DJ stops picking it. |
 | ✕ (queue row) | Remove the track. An unrated track is also recorded as disliked. |
 
-**Skips.** Pressing next before 30 s (or before a quarter of a long track) counts as a skip. One skip lowers a track's rank; two remove it from the DJ's picks, and skipped plays count against the artist. A dislike's own next is not also counted as a skip.
+**Skips.** Pressing next before 30 s (or before a quarter of a long track) counts as a skip. One skip lowers a track's rank; two remove it from the DJ's picks, and skipped plays count against the artist. A dislike is not also counted as a skip.
 
 ## The AI DJ
 

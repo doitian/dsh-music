@@ -85,7 +85,7 @@ A track holds one of three taste levels — **liked**, **unrated**, or
 | Control | Level it sets |
 |---|---|
 | the **♡ / ♥** in a queue row, or the heart in the transport row | **liked** — the track goes into the account's 我喜欢的音乐 playlist on NetEase. Clicking the filled heart takes the like back. |
-| the **✕** in the transport row | **disliked** — local, and fed to the DJ, which stops picking the track — and playback moves on to the next one. Clicking the filled ✕ clears it. |
+| the **✕** in the transport row | **disliked** — local, and fed to the DJ, which stops picking the track. The track leaves the queue, so playback moves on to the next one. |
 | the **✕** on a queue row | **disliked** as well. Taking a track out of the queue is a judgement about the track, not just about the list — without recording it the DJ re-derives the same track from the same similarity and charts within a batch or two. |
 | neither | unrated. |
 
@@ -101,7 +101,7 @@ needs are both plain endpoints:
   cached per track (5 minutes), so a whole queue's hearts cost one request, and
   only tracks with no fresh answer ever cost another.
 
-Five properties are worth knowing, because they are what makes a heart mean
+Six properties are worth knowing, because they are what makes a heart mean
 something:
 
 - **An unknown track is not an unliked one.** A track nobody has asked about has
@@ -121,6 +121,14 @@ something:
   where the plugin's own taste memory is the only record. Liking and disliking
   are the same three levels rather than two flags: one replaces the other, and
   disliking a liked track removes it on NetEase as well.
+- **A dislike leaves the queue.** Whatever sends it — the transport's ✕, the
+  legacy `/feedback` route, a row removal — a dislike passes through
+  `applyTaste`, which takes the track out of the queue wherever it sits. The
+  playing track goes too, and playback moves on to the next; past the end of
+  the queue it wraps to the start, as `next` does. The page therefore sends the
+  level alone: pressing next as well would skip a second track. A disliked
+  track queued again on purpose stays, drawn with a filled ✕, which clears the
+  level.
 - **Removing a queued track is a dislike, once.** The row's ✕ goes through the
   queue endpoint, whose removal *is* the judgement: the row leaves the list and
   an unrated track is recorded as disliked in the same request, so the DJ does
@@ -129,7 +137,7 @@ something:
   keeps it, because removing is often just queue housekeeping (clearing out what
   has already been heard) and rewriting a like into a dislike would be worse
   than missing the signal. Removing the track that is playing also advances
-  playback, which a removal otherwise would not.
+  playback.
 
 ### Skips
 
@@ -142,10 +150,11 @@ a dislike.
 What does *not* count is as deliberate as what does: going back, a track ending
 or failing on its own, single-repeat mode (which stays on the track), and a
 track that never reported a position — paused, blocked by autoplay, or still
-loading — because a track nobody heard was not rejected. Nor does the next
-that the transport row's **✕** presses after a dislike: the dislike is already
-the record, and counting it as a skip too would weigh an early dislike more
-than a later one.
+loading — because a track nobody heard was not rejected. Nor does disliking:
+the host removes a disliked track and moves on without a next, and a next
+pressed on a disliked track queued again on purpose is not counted either. The
+dislike is already the record, and counting it as a skip too would weigh an
+early dislike more than a later one.
 
 ### Heard through
 
@@ -631,7 +640,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 162 deterministic tests: pure, source cache, like state, DJ, browser half
+npm test             # 164 deterministic tests: pure, source cache, like state, DJ, browser half
 npm run test:live    # 36 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -648,11 +657,11 @@ network cases inside it.
 Or run one file directly:
 
 ```powershell
-node test/netease.test.mjs   # 37 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
+node test/netease.test.mjs   # 38 pure: normalisation, quality ladder, likes, cookies, taste, skips, player state
 node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, sampling, pacing
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 65 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
-node test/client.test.mjs    # 38 browser half: the engine against a fake DOM, and the page it pairs with
+node test/client.test.mjs    # 39 browser half: the engine against a fake DOM, and the page it pairs with
 node test/host.test.mjs      # 36 integration: routes, streaming, curation, quality, taste, skips
 ```
 

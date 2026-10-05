@@ -1551,10 +1551,9 @@
           await sendTaste(track, 'none', event?.currentTarget);
           return;
         }
-        if (await sendTaste(track, 'disliked', event?.currentTarget)) {
-          toast(t('disliked'));
-          control({ action: 'next' });
-        }
+        // The host takes a disliked track out of the queue, and moves on when it
+        // was playing; pressing next here as well would skip a second track.
+        if (await sendTaste(track, 'disliked', event?.currentTarget)) toast(t('disliked'));
       };
 
       $('dj-toggle').onclick = async () => {
