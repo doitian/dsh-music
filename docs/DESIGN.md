@@ -150,8 +150,13 @@ listener moved on. A play left inside the skip window is not reported at all.
 The Player's `onStart` and `onFinish` hooks mark the two moments, and every
 way a play can end — finishing, failing, a skip, a jump, the queue replaced or
 cleared — closes it; a single-repeat loop is a play of its own. It runs only
-signed in, `config.scrobble: false` turns it off, a failure never reaches
-playback, and `/music/health` shows `scrobble.last`.
+signed in, and a failure never reaches playback; `/music/health` shows
+`scrobble.last`. The header's **Listening history** switch, shown only signed
+in, turns it on or off: the choice is saved in `session.json`
+(`settings.scrobble`) and beats `config.scrobble`, the same precedence as the
+quality and DJ model choices, so a stale profile setting cannot override what
+was just chosen. `POST /music/api/scrobble { enabled }` is the switch's
+route.
 
 Getting there took several wrong turns, worth keeping so nobody repeats them:
 
@@ -568,7 +573,7 @@ add `config` to the inserted entry:
 | `dataDir` | `$DSH_HOME/music` | Where `session.json` (cookie, history, feedback, settings) lives. |
 | `audioLevel` | `exhigh` | Initial streaming quality, until the player's picker records a choice. One of the levels above; an unknown value falls back to `exhigh`. |
 | `requestTimeoutMs` | `15000` | Per-request deadline for NetEase calls. |
-| `scrobble` | `true` | Report plays to the account's NetEase listening history; see [Listening history](#listening-history). |
+| `scrobble` | `true` | Report plays to the account's NetEase listening history, until the player's switch makes a choice; see [Listening history](#listening-history). |
 | `dj.provider` / `dj.model` | unset | Model route for the DJ's model tier — see [Choosing the model](#choosing-the-model). Unset, the tier follows `agent-default-model` and only then falls back to discovery; any failure falls back to heuristics. |
 | `dj.sessionId` | minted, persisted | The identity every model call carries. Adapters map it onto the provider's per-conversation header. Pin it to control what a provider sees, or leave it unset and let the DJ mint one per install. |
 
@@ -604,7 +609,7 @@ browser (DSH web GUI, http://127.0.0.1:<port>)
                           └─ lib/router.js    JSON API, HTML, Range-capable audio proxy
 ```
 
-Four design notes:
+Five design notes:
 
 - **Audio is proxied, not redirected.** CDN URLs expire after 20 minutes and
   need the session cookie at *resolution* time, so the host resolves and streams
@@ -623,6 +628,16 @@ Four design notes:
 - **The host owns the desired state; the engine owns the audio element.** They
   reconcile through `rev` / `transportRev` counters, so agent tools, the page,
   and the DJ all drive one state machine instead of three.
+- **The page carries its own icons.** DSH shares no icon set with plugins:
+  the shell's frozen module table holds React, Cordis and its UI packages
+  (`dsh-client-store`, `-ui-slots`, `-ui-primitives`, `-ui-dockkit`), and the
+  primitives' only icon is a file-type one. The page is also its own document
+  in an iframe, so it could not use the shell's React components anyway. It
+  inlines a small set of Lucide icons (ISC) instead, all drawn as the same
+  24px outline, with a state filling the outline — a liked heart — rather
+  than swapping in a different glyph. Text glyphs such as ♡ ✕ ▲ ▼ rendered
+  in each platform's font, some as colour emoji, which is what made the
+  controls look inconsistent.
 - **The client half is hand-written.** `lib/client.js` is a plain
   `window.__ModuleLoader__` bundle using only baseline `react`, so there is no
   tsdown/Vite step. It registers the sidebar row (`sidebar.panellist`, a list
@@ -715,8 +730,8 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 187 deterministic tests: pure, source cache, like state, DJ, browser half
-npm run test:live    # 39 integration tests against the live NetEase API
+npm test             # 189 deterministic tests: pure, source cache, like state, DJ, browser half
+npm run test:live    # 40 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -737,8 +752,8 @@ node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, samplin
 node test/scrobble.test.mjs  # 10 scrobbling: weapi encryption, the play-log request, what is reported
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 73 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
-node test/client.test.mjs    # 42 browser half: the engine against a fake DOM, and the page it pairs with
-node test/host.test.mjs      # 39 integration: routes, streaming, curation, quality, taste, skips
+node test/client.test.mjs    # 44 browser half: the engine against a fake DOM, and the page it pairs with
+node test/host.test.mjs      # 40 integration: routes, streaming, curation, quality, taste, skips
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented

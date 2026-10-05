@@ -24,7 +24,7 @@ Optional. Signed out, search, charts, playlists, lyrics and non-VIP playback all
 
 Click **登录 Sign in** in the player and scan the QR code with the NetEase Cloud Music app, or ask the agent to use `music_login`. The cookie is stored in `$DSH_HOME/music/session.json`.
 
-**Listening history.** Signed in, songs you play here show up in your NetEase history — 最近播放 and 听歌排行 — on every device, as plays from the web. A song counts once you've listened past the skip window (30 seconds, or a quarter of a long song); one you skip sooner isn't recorded. To keep your plays local, set `scrobble: false` (see [Configuration](#configuration)).
+**Listening history.** Signed in, songs you play here show up in your NetEase history — 最近播放 and 听歌排行 — on every device, as plays from the web. A song counts once you've listened past the skip window (30 seconds, or a quarter of a long song); one you skip sooner isn't recorded. To keep your plays local, turn off the **Listening history** switch at the top of the player (it's there while you're signed in), or set `scrobble: false` in the config; the switch wins over the config.
 
 ## Agent tools
 
@@ -97,7 +97,7 @@ All fields are optional, under the plugin entry's `config` in your profile's `co
 | `audioLevel` | `exhigh` | Starting quality, until you pick one in the player |
 | `dataDir` | `$DSH_HOME/music` | Where `session.json` lives |
 | `requestTimeoutMs` | `15000` | NetEase request deadline |
-| `scrobble` | `true` | Report your plays to your NetEase listening history |
+| `scrobble` | `true` | Report your plays to your NetEase listening history, until you use the player's switch |
 | `dj.provider` / `dj.model` | session model | The DJ's model, as above |
 
 Batch size (`djBatchSize`, 5) and refill threshold (`djAutoExtendBelow`, 3) have no control in the player. Edit them in `session.json` while the harness is stopped.

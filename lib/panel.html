@@ -48,7 +48,11 @@
         background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
       }
       input:focus, select:focus, button:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
-      svg { display: block; width: 18px; height: 18px; fill: currentColor; }
+      /* One icon set, one stroke: every icon on the page is drawn the same way,
+         and a state fills the outline rather than swapping in another glyph. */
+      svg.i { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+      svg.i.filled { fill: currentColor; }
+      svg.i.small { width: 14px; height: 14px; }
 
       /* ------------------------------------------------------------ layout
          Wide: the stage (what is playing) on the left, what comes next — the
@@ -104,7 +108,8 @@
         display: grid; place-items: center; color: var(--faint); font-size: 40px;
         box-shadow: 0 6px 24px color-mix(in srgb, #000 14%, transparent);
       }
-      .cover::before { content: "♪"; }
+      #cover-icon { display: grid; place-items: center; width: 38%; height: 38%; }
+      #cover-icon svg.i { width: 100%; height: 100%; stroke-width: 1.5; }
       #cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
       .np-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
       .now-title { font-size: 22px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
@@ -116,7 +121,7 @@
       .taste { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
       .taste button {
         width: 34px; height: 34px; padding: 0; border-radius: 50%; display: grid; place-items: center;
-        background: none; font-size: 15px; line-height: 1; color: var(--muted);
+        background: none; color: var(--muted);
       }
       .taste button:hover:not(:disabled) { color: var(--fg); background: var(--hover); }
       .taste button.on { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
@@ -132,7 +137,8 @@
       .transport button:hover:not(:disabled) { background: var(--hover); }
       .transport #play { width: 52px; height: 52px; background: var(--accent); color: #fff; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
       .transport #play:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); }
-      .transport #play svg { width: 22px; height: 22px; }
+      .transport svg.i { width: 20px; height: 20px; }
+      .transport #play svg.i { width: 22px; height: 22px; }
 
       .secondary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
       .secondary select, .secondary > button { padding: 4px 8px; font-size: 12px; }
@@ -165,18 +171,21 @@
       .dj-card .card-head .title { color: var(--fg); font-size: 13px; font-weight: 650; text-transform: none; letter-spacing: 0; }
       .dj-body { display: flex; flex-direction: column; gap: 8px; padding: 0 12px; font-size: 12px; }
       #dj-prompt { width: 100%; }
-      /* The DJ switch: a toggle that reads on or off at a glance. */
-      #dj-toggle {
+      /* A switch reads on or off at a glance: the DJ, the listening history. */
+      .switch {
         position: relative; width: 38px; height: 22px; padding: 0; border-radius: 11px;
         background: color-mix(in srgb, var(--fg) 20%, transparent); border: 0; color: transparent; overflow: hidden;
       }
-      #dj-toggle::after {
+      .switch::after {
         content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
         background: #fff; transition: transform 0.15s; box-shadow: 0 1px 3px color-mix(in srgb, #000 30%, transparent);
       }
-      #dj-toggle.on { background: var(--accent); }
-      #dj-toggle.on::after { transform: translateX(16px); }
-      #dj-toggle:hover:not(:disabled) { filter: brightness(0.96); }
+      .switch.on { background: var(--accent); }
+      .switch.on::after { transform: translateX(16px); }
+      .switch:hover:not(:disabled) { filter: brightness(0.96); }
+      /* The listening-history switch only means something signed in. */
+      .history { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+      .history[hidden] { display: none; }
       .plan b { color: var(--accent); }
       .plan .muted, .muted { color: var(--muted); }
       .plan > div + div { margin-top: 2px; }
@@ -187,7 +196,7 @@
         display: inline-flex; gap: 2px; align-items: center; color: var(--fg);
         background: var(--accent-soft); border-radius: 999px; padding: 1px 2px 1px 9px;
       }
-      #boosts .boost button { border: 0; background: none; padding: 0 6px; color: var(--muted); }
+      #boosts .boost button { border: 0; background: none; padding: 2px 5px; color: var(--muted); }
       #boosts .boost button:hover:not(:disabled) { color: var(--fg); }
 
       /* The DJ model picker is a set-once setting, so it keeps only its header
@@ -214,7 +223,7 @@
       .row.playing { background: var(--accent-soft); }
       .row.playing .name { color: var(--accent); font-weight: 600; }
       .row .idx { width: 20px; text-align: right; color: var(--faint); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; }
-      .row.playing .idx { color: var(--accent); }
+      .row.playing .idx { color: var(--accent); display: grid; justify-items: end; }
       .row img { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; flex: none; background: var(--panel); }
       .row .meta { min-width: 0; flex: 1; }
       .row .name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -222,14 +231,15 @@
       .row .tag { font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; color: var(--muted); flex: none; }
       .row .dur { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; font-size: 12px; min-width: 32px; text-align: right; }
       .row .acts { display: none; gap: 4px; flex: none; }
-      .row .acts button { padding: 1px 6px; font-size: 11px; background: none; color: var(--muted); }
+      .row .acts button { padding: 3px 5px; background: none; color: var(--muted); }
+      .row .acts button:hover:not(:disabled) { color: var(--fg); }
       .row:hover .acts { display: flex; }
       /* The list's own like control. A liked track keeps its filled heart
          visible; the hollow one only appears on hover, so an unrated list is
          not a wall of outlines. */
       .row .heart {
-        background: none; border: 0; padding: 0; width: 16px; flex: none;
-        font-size: 14px; line-height: 1; color: var(--muted); opacity: 0; transition: opacity 0.12s;
+        background: none; border: 0; padding: 0; flex: none;
+        color: var(--muted); opacity: 0; transition: opacity 0.12s;
       }
       .row:hover .heart { opacity: 1; }
       .row .heart.on { opacity: 1; color: var(--accent); }
@@ -257,6 +267,10 @@
       <header>
         <div class="brand"><span data-i18n="brand">Music</span><small>music.163.com</small></div>
         <div class="spacer"></div>
+        <div class="history" id="history" hidden>
+          <span id="history-label" data-i18n="scrobbleLabel">Listening history</span>
+          <button id="scrobble-toggle" class="switch" role="switch" aria-labelledby="history-label"></button>
+        </div>
         <div id="account"></div>
       </header>
 
@@ -264,7 +278,7 @@
         <section class="stage">
           <div id="notices"></div>
           <div class="np">
-            <div class="cover"><img id="cover" alt="" /></div>
+            <div class="cover"><span id="cover-icon"></span><img id="cover" alt="" /></div>
             <div class="np-text">
               <div class="now-title" id="np-title" data-i18n="nothingPlaying">Nothing playing</div>
               <div class="now-artists" id="np-artists"></div>
@@ -272,10 +286,10 @@
               <!-- Labels are state-dependent (a filled heart un-likes), so the
                    script owns text and title rather than data-i18n. -->
               <div class="taste">
-                <button id="like" title="Like">♡</button>
-                <button id="dislike" title="Dislike">✕</button>
-                <button id="boost-more" title="More like this for an hour">▲</button>
-                <button id="boost-less" title="Fewer like this for an hour">▼</button>
+                <button id="like" title="Like"></button>
+                <button id="dislike" title="Dislike"></button>
+                <button id="boost-more" title="More like this for an hour"></button>
+                <button id="boost-less" title="Fewer like this for an hour"></button>
               </div>
             </div>
           </div>
@@ -286,9 +300,9 @@
             <span id="t-dur">0:00</span>
           </div>
           <div class="transport">
-            <button id="prev" data-i18n-title="prev" title="Previous"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg></button>
-            <button id="play" data-i18n-title="playPause" title="Play/pause"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
-            <button id="next" data-i18n-title="next" title="Next"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l10.5-7z"/></svg></button>
+            <button id="prev" data-i18n-title="prev" title="Previous"></button>
+            <button id="play" data-i18n-title="playPause" title="Play/pause"></button>
+            <button id="next" data-i18n-title="next" title="Next"></button>
           </div>
           <div class="secondary">
             <button id="mode" data-i18n-title="modeTitle" data-i18n="modeList" title="Playback mode">List</button>
@@ -316,7 +330,7 @@
             <div class="card-head">
               <span class="title">AI DJ</span>
               <span class="grow"></span>
-              <button id="dj-toggle" role="switch" data-i18n-title="djToggleTitle" title="Continuous AI DJ: keep the queue stocked">AI DJ</button>
+              <button id="dj-toggle" class="switch" role="switch" data-i18n-title="djToggleTitle" title="Continuous AI DJ: keep the queue stocked">AI DJ</button>
             </div>
             <div class="dj-body">
               <input id="dj-prompt" data-i18n-ph="djPromptPh" placeholder="AI DJ mood, e.g. rainy afternoon jazz" />
@@ -473,6 +487,11 @@
           boostCleared: '已取消临时偏好',
           boostsTitle: '临时偏好',
           boostMinutes: '{n} 分钟',
+          scrobbleLabel: '听歌记录',
+          scrobbleOnTitle: '播放计入网易云听歌记录（最近播放、听歌排行）——点击停止',
+          scrobbleOffTitle: '播放只留在本地——点击计入网易云听歌记录',
+          scrobbleOn: '播放将计入网易云听歌记录',
+          scrobbleOff: '播放不再计入听歌记录',
           djOn: 'AI DJ 已开启',
           djOff: 'AI DJ 已关闭',
           connectFailed: '连接失败：',
@@ -570,6 +589,11 @@
           boostCleared: 'Boost cleared',
           boostsTitle: 'Boosts',
           boostMinutes: '{n} min',
+          scrobbleLabel: 'Listening history',
+          scrobbleOnTitle: 'Plays are added to your NetEase listening history (最近播放, 听歌排行) — click to stop',
+          scrobbleOffTitle: 'Plays stay local — click to add them to your NetEase listening history',
+          scrobbleOn: 'Plays will be added to your NetEase listening history',
+          scrobbleOff: 'Plays will stay local',
           djOn: 'AI DJ on',
           djOff: 'AI DJ off',
           connectFailed: 'Cannot reach the host: ',
@@ -597,19 +621,62 @@
       }
 
       /** Translate a key, interpolating `{name}` placeholders from `vars`. */
-      /** Monochrome icons for controls whose glyph changes with state. */
+      /**
+       * The page's one icon set: Lucide (https://lucide.dev, ISC licence), drawn
+       * as 24px outlines. DSH shares no icon set with plugins — the shell's
+       * module table holds React, Cordis and its UI primitives, none an icon
+       * library — and this page is its own document, so it carries its own.
+       * A state fills an outline (a liked heart) rather than swapping glyphs.
+       */
       const ICONS = {
-        play: '<path d="M8 5v14l11-7z"/>',
-        pause: '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>',
-        volume: '<path d="M4 9v6h4l5 4V5L8 9zM16 8.5a4.5 4.5 0 0 1 0 7l-1-1.3a2.9 2.9 0 0 0 0-4.4zM17.8 5.6a8 8 0 0 1 0 12.8l-1-1.3a6.4 6.4 0 0 0 0-10.2z"/>',
-        muted: '<path d="M4 9v6h4l5 4V5L8 9zM16.3 9.4l1.1-1.1 2.1 2.1 2.1-2.1 1.1 1.1-2.1 2.1 2.1 2.1-1.1 1.1-2.1-2.1-2.1 2.1-1.1-1.1 2.1-2.1z"/>',
+        play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+        pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+        skipBack: '<polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/>',
+        skipForward: '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>',
+        volume: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+        muted: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/>',
+        heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+        x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        more: '<path d="m17 11-5-5-5 5"/><path d="m17 18-5-5-5 5"/>',
+        less: '<path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/>',
+        music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
       };
 
-      /** Paint `name` into `el`, touching the DOM only when it changes. */
-      function setIcon(el, name) {
-        if (!el || el.dataset.icon === name) return;
-        el.dataset.icon = name;
-        el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+      function paintStaticIcons() {
+        setIcon($('prev'), 'skipBack');
+        setIcon($('next'), 'skipForward');
+        setIcon($('dislike'), 'x');
+        setIcon($('boost-more'), 'more');
+        setIcon($('boost-less'), 'less');
+        setIcon($('cover-icon'), 'music');
+      }
+
+      /**
+       * The listening-history switch: shown only signed in — there is no history
+       * to write to otherwise — and on when plays are being reported.
+       */
+      function paintHistory() {
+        const scrobble = state?.scrobble;
+        const signedIn = Boolean(state?.authenticated);
+        $('history').hidden = !signedIn || !scrobble;
+        const on = Boolean(scrobble?.enabled);
+        $('scrobble-toggle').classList.toggle('on', on);
+        $('scrobble-toggle').setAttribute?.('aria-checked', String(on));
+        $('scrobble-toggle').title = t(on ? 'scrobbleOnTitle' : 'scrobbleOffTitle');
+      }
+
+      /** One icon as markup; `filled` fills the outline, `small` is the compact size. */
+      function icon(name, { filled = false, small = false } = {}) {
+        const classes = ['i', filled ? 'filled' : '', small ? 'small' : ''].filter(Boolean).join(' ');
+        return `<svg class="${classes}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
+      }
+
+      /** Paint an icon into `el`, touching the DOM only when it changes. */
+      function setIcon(el, name, options = {}) {
+        const key = `${name}${options.filled ? ':filled' : ''}`;
+        if (!el || el.dataset.icon === key) return;
+        el.dataset.icon = key;
+        el.innerHTML = icon(name, options);
       }
 
       function t(key, vars) {
@@ -999,10 +1066,11 @@
             $('lyrics').innerHTML = '<p class="hint">—</p>';
           }
         }
-        setIcon($('play'), state.playing ? 'pause' : 'play');
+        setIcon($('play'), state.playing ? 'pause' : 'play', { filled: true });
         $('mode').textContent = { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList');
         $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
         $('dj-toggle').classList.toggle('on', Boolean(state.dj?.enabled));
+        paintHistory();
         // The mood brief is persisted player setting, not part of the DJ status
         // block, so it comes from `settings`.
         if (document.activeElement !== $('dj-prompt')) $('dj-prompt').value = state.settings?.djPrompt ?? '';
@@ -1090,13 +1158,13 @@
             const index = start + offset;
             const playing = index === state.index;
             return `<div class="row ${playing ? 'playing' : ''}" data-jump="${index}">
-              <span class="idx">${playing ? '▶' : index + 1}</span>
+              <span class="idx">${playing ? icon('play', { filled: true, small: true }) : index + 1}</span>
               <img src="${esc(track.picUrl || '')}" alt="" loading="lazy">
               <span class="meta"><span class="name">${esc(track.name)}</span><span class="sub">${esc((track.artists || []).join(' / '))}</span></span>
               ${track.vip ? '<span class="tag">VIP</span>' : ''}
-              <button class="heart ${track.liked ? 'on' : ''}" data-like="${index}" title="${esc(t(track.liked ? 'unlike' : 'like'))}">${track.liked ? '♥' : '♡'}</button>
+              <button class="heart ${track.liked ? 'on' : ''}" data-like="${index}" title="${esc(t(track.liked ? 'unlike' : 'like'))}">${icon('heart', { filled: track.liked, small: true })}</button>
               <span class="dur">${fmt(track.duration)}</span>
-              <span class="acts"><button data-remove="${index}" title="${esc(t('remove'))}">✕</button></span>
+              <span class="acts"><button data-remove="${index}" title="${esc(t('remove'))}">${icon('x', { small: true })}</button></span>
             </div>`;
           })
           .join('');
@@ -1114,7 +1182,7 @@
         const track = state?.current;
         const liked = Boolean(track?.liked);
         const disliked = Boolean(track?.disliked);
-        $('like').textContent = liked ? '♥' : '♡';
+        setIcon($('like'), 'heart', { filled: liked });
         $('like').classList.toggle('on', liked);
         $('like').title = t(liked ? 'unlike' : 'like');
         $('dislike').classList.toggle('on', disliked);
@@ -1140,7 +1208,7 @@
             boosts
               .map((boost) => {
                 const minutes = Math.max(Math.round((boost.until - now) / 60_000), 1);
-                return `<span class="boost">${boost.direction === 'more' ? '▲' : '▼'} ${esc(boost.name)} · ${esc(t('boostMinutes', { n: minutes }))}<button data-unboost="${boost.id}" title="${esc(t('boostClear'))}">✕</button></span>`;
+                return `<span class="boost">${icon(boost.direction === 'more' ? 'more' : 'less', { small: true })} ${esc(boost.name)} · ${esc(t('boostMinutes', { n: minutes }))}<button data-unboost="${boost.id}" title="${esc(t('boostClear'))}">${icon('x', { small: true })}</button></span>`;
               })
               .join('')
           : '';
@@ -1741,6 +1809,21 @@
         if (target) return sendBoost(Number(target.dataset.unboost), 'none', target);
       };
 
+      $('scrobble-toggle').onclick = async (event) => {
+        const next = !state?.scrobble?.enabled;
+        const button = event?.currentTarget;
+        if (button) button.disabled = true;
+        try {
+          state = await api('/scrobble', { method: 'POST', body: { enabled: next } });
+          render();
+          toast(t(next ? 'scrobbleOn' : 'scrobbleOff'));
+        } catch (error) {
+          toast(failureText(error));
+        } finally {
+          if (button) button.disabled = false;
+        }
+      };
+
       $('dj-toggle').onclick = async () => {
         try {
           const data = await api('/dj', { method: 'POST', body: { enabled: !state?.dj?.enabled, prompt: $('dj-prompt').value } });
@@ -1787,6 +1870,7 @@
         }
       }
 
+      paintStaticIcons();
       applyLocale();
       watchShellLocale();
       refresh();

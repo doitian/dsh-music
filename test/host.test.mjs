@@ -898,6 +898,30 @@ test('health reports scrobbling, on by default and off with the switch', async (
   }
 });
 
+test('the player\'s listening-history switch is saved and beats the profile', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-music-scrobble-'));
+  try {
+    const app = await mount({ dataDir, config: { scrobble: true } });
+    try {
+      const off = await app.post('/music/api/scrobble', { enabled: false });
+      assert.equal(off.status, 200);
+      assert.equal(off.body.scrobble.enabled, false, 'the page reads it off the snapshot');
+      assert.equal(app.readSession().settings.scrobble, false, 'and it is saved at once');
+      assert.equal((await app.post('/music/api/scrobble', { enabled: 'yes' })).status, 400);
+    } finally {
+      await app.close();
+    }
+    const again = await mount({ dataDir, config: { scrobble: true } });
+    try {
+      assert.equal((await again.json('/music/health')).body.scrobble.enabled, false, 'a restart keeps the choice over the profile');
+    } finally {
+      await again.close();
+    }
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('a boost is set, shown, cleared and refused over the route', async () => {
   const app = await mount();
   try {

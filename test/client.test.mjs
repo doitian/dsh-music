@@ -795,6 +795,9 @@ async function bootPanel(options = {}) {
       const { trackId, level } = calls.at(-1).body;
       applyTaste(state, trackId, level);
       body = state;
+    } else if (path === '/scrobble') {
+      state.scrobble = { ...(state.scrobble ?? {}), enabled: calls.at(-1).body.enabled };
+      body = state;
     } else if (path === '/boost') {
       const { trackId, direction } = calls.at(-1).body;
       applyBoost(state, trackId, direction);
@@ -934,8 +937,8 @@ test('the song list draws a filled heart only for a liked track', async () => {
   const rows = html.split('<div class="row').slice(1);
   assert.equal(rows.length, 2, 'one row per queued track');
   assert.doesNotMatch(rows[0], /class="heart on"/, 'an unrated track has no filled heart');
-  assert.match(rows[0], /data-like="0"[^>]*>♡</, 'and offers the hollow one');
-  assert.match(rows[1], /class="heart on" data-like="1" title="Unlike">♥</, 'a liked track keeps its filled heart');
+  assert.match(rows[0], /data-like="0"[^>]*><svg class="i small"/, 'and offers the outline');
+  assert.match(rows[1], /class="heart on" data-like="1" title="Unlike"><svg class="i filled small"/, 'a liked track keeps its filled heart');
 });
 
 test('the row heart is a switcher, and it does not play the row', async () => {
@@ -959,18 +962,18 @@ test('the row heart is a switcher, and it does not play the row', async () => {
 
 test('the transport row is a switcher too', async () => {
   const panel = await bootPanel({ state: queueState({ liked: [1] }) });
-  assert.equal(panel.element('like').textContent, '♥');
+  assert.equal(panel.element('like').dataset.icon, 'heart:filled');
   assert.equal(panel.element('like').classList.contains('on'), true);
   assert.equal(panel.element('like').title, 'Unlike');
 
   await panel.element('like').onclick();
   assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'none' } });
-  assert.equal(panel.element('like').textContent, '♡', 'the button follows the level it just set');
+  assert.equal(panel.element('like').dataset.icon, 'heart', 'the button follows the level it just set');
   assert.equal(panel.element('like').title, 'Like');
 
   await panel.element('like').onclick();
   assert.deepEqual(panel.calls.at(-1), { path: '/taste', body: { trackId: 1, level: 'liked' } });
-  assert.equal(panel.element('like').textContent, '♥');
+  assert.equal(panel.element('like').dataset.icon, 'heart:filled');
 });
 
 test('the arrows boost the playing track, and a filled arrow clears it', async () => {
@@ -996,11 +999,32 @@ test('the boosts in force are listed with their time left, and each can be ended
   state.boosts = [{ id: 2, name: 'T2', artists: ['A'], direction: 'less', until: Date.now() + 42 * 60_000 }];
   const panel = await bootPanel({ state });
   const html = panel.element('boosts').innerHTML;
-  assert.match(html, /▼ T2 · 4[12] min/, 'direction, track and minutes left');
+  assert.match(html, /<path d="m7 6 5 5 5-5"\/>.*<\/svg> T2 · 4[12] min/, 'the "fewer" icon, the track and the minutes left');
 
   await panel.element('boosts').onclick({ target: { closest: (asked) => (asked === '[data-unboost]' ? { dataset: { unboost: '2' } } : null) } });
   assert.deepEqual(panel.calls.at(-1), { path: '/boost', body: { trackId: 2, direction: 'none' } });
   assert.equal(panel.element('boosts').innerHTML, '', 'nothing left to list');
+});
+
+test('the listening-history switch shows its state, and a click turns it the other way', async () => {
+  const state = queueState({ currentId: 1 });
+  Object.assign(state, { authenticated: true, scrobble: { enabled: true, active: true, last: null } });
+  const panel = await bootPanel({ state });
+  assert.equal(panel.element('history').hidden, false, 'signed in, the switch is there');
+  assert.equal(panel.element('scrobble-toggle').classList.contains('on'), true);
+  assert.match(panel.element('scrobble-toggle').title, /click to stop/);
+
+  await panel.element('scrobble-toggle').onclick();
+  assert.deepEqual(panel.calls.at(-1), { path: '/scrobble', body: { enabled: false } });
+  assert.equal(panel.element('scrobble-toggle').classList.contains('on'), false);
+  assert.equal(panel.element('toast').textContent, 'Plays will stay local');
+});
+
+test('signed out, there is no listening-history switch', async () => {
+  const state = queueState({ currentId: 1 });
+  Object.assign(state, { authenticated: false, scrobble: { enabled: true, active: false, last: null } });
+  const panel = await bootPanel({ state });
+  assert.equal(panel.element('history').hidden, true);
 });
 
 test('the boost labels follow the shell language', async () => {
@@ -1142,7 +1166,7 @@ test('a refused like says so in the page’s own language, and changes nothing',
   await panel.element('like').onclick();
   assert.equal(panel.element('toast').textContent, 'Sign in to NetEase to like tracks');
   assert.equal(panel.state.current.liked, false, 'no heart for a like NetEase never received');
-  assert.equal(panel.element('like').textContent, '♡');
+  assert.equal(panel.element('like').dataset.icon, 'heart');
 });
 
 test('a refusal the page does not know is reported in the host’s words', async () => {
