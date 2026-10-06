@@ -756,7 +756,8 @@ both stay empty.
 Chromium refuses to start audio until the page has been **interacted with**, and
 the plugin's desired state can say "playing" long before that — the agent
 queued something, or the DJ refilled the queue while the page was loading. The
-player then shows:
+player then shows, floating just below its header — over the page rather than
+in it, so nothing the listener is about to click moves when it comes or goes:
 
 > 浏览器需要你先与页面交互一次才会播放声音 / Chromium needs one interaction with this window before it will play audio
 

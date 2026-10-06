@@ -241,9 +241,20 @@
       .about .writing { color: var(--muted); margin: 0; }
       .details .source { align-self: flex-start; font-size: 12px; }
 
+      /* Notices float over the page just below the header instead of taking
+         a place in it: one that comes and goes, such as the autoplay banner,
+         must not move what the listener is about to click. */
+      header { position: relative; }
+      #notices {
+        position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); z-index: 30;
+        width: max-content; max-width: calc(100% - 2 * var(--gap));
+        display: flex; flex-direction: column; gap: 6px; pointer-events: none;
+      }
+      #notices > * { pointer-events: auto; }
       .need-gesture {
-        background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        background: color-mix(in srgb, var(--accent) 13%, var(--bg)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
         border-radius: var(--radius); padding: 8px 12px; font-size: 12px;
+        box-shadow: 0 6px 20px color-mix(in srgb, #000 18%, transparent);
       }
 
       /* -------------------------------------------------------------- side */
@@ -353,11 +364,11 @@
           <button id="scrobble-toggle" class="switch" role="switch" aria-labelledby="history-label"></button>
         </div>
         <div id="account"></div>
+        <div id="notices" aria-live="polite"></div>
       </header>
 
       <main>
         <section class="stage">
-          <div id="notices"></div>
           <div class="np">
             <div class="cover"><span id="cover-icon"></span><img id="cover" alt="" /></div>
             <div class="np-text">
