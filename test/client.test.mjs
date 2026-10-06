@@ -73,9 +73,9 @@ function makeElement(tag, playState = { refusals: 0, attempts: 0 }) {
       playState.attempts += 1;
       if (playState.refusals > 0) {
         playState.refusals -= 1;
-        return Promise.reject(
-          new Error('NotAllowedError: play() failed because the user did not interact with the document first'),
-        );
+        const refusal = new Error("play() failed because the user didn't interact with the document first");
+        refusal.name = 'NotAllowedError';
+        return Promise.reject(refusal);
       }
       this.paused = false;
       return Promise.resolve();
@@ -448,6 +448,12 @@ test('a refused play is reported at once so the hint can appear', async () => {
     const reports = harness.calls.filter((call) => call.url.endsWith('/report'));
     assert.ok(reports.length >= 1, 'the refusal is reported without waiting for the idle cadence');
     assert.match(reports.at(-1).init.body, /"playing":false/);
+    assert.match(reports.at(-1).init.body, /"blocked":true/, 'as a refusal, the only thing the hint is for');
+
+    globalThis.window.__dshMusicEngine.playNow();
+    await settle();
+    const after = harness.calls.filter((call) => call.url.endsWith('/report')).at(-1).init.body;
+    assert.match(after, /"blocked":false/, 'and audio that starts clears it');
   } finally {
     await dispose?.();
     harness.restore();
@@ -686,7 +692,12 @@ function makePageElement(id) {
     setAttribute(name, value) { this.attributes[name] = String(value); },
     getAttribute(name) { return this.attributes[name] ?? null; },
     appendChild(child) { this.children.push(child); return child; },
-    remove() {},
+    append(child) { child.parent = this; this.children.push(child); },
+    remove() {
+      if (!this.parent) return;
+      this.parent.children = this.parent.children.filter((child) => child !== this);
+      this.parent = null;
+    },
     before() {},
     focus() {},
     showModal() {},
@@ -779,10 +790,11 @@ async function bootPanel(options = {}) {
   const document = {
     activeElement: null,
     getElementById(id) {
+      if (id === 'gesture') return (elements.get('notices')?.children ?? []).find((child) => child.id === 'gesture') ?? null;
       if (!elements.has(id)) elements.set(id, makePageElement(id));
       return elements.get(id);
     },
-    createElement: (tag) => makePageElement(tag),
+    createElement: (tag) => ({ ...makePageElement(tag), querySelector: () => makePageElement('child') }),
     addEventListener() {},
     querySelector: () => null,
     querySelectorAll: () => [],
@@ -1127,6 +1139,34 @@ test('a track change refetches and replaces the lyrics', async () => {
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456']);
   assert.match(panel.element('lyrics').innerHTML, /the next track/);
   assert.doesNotMatch(panel.element('lyrics').innerHTML, /first line/);
+});
+
+// ------------------------------------------------------------ autoplay hint
+
+/** The host wants playback; the transport's last report for the track says it is not playing. */
+function wantedState(reported) {
+  return stateDocument({
+    playing: true,
+    reported: { trackId: 123, position: 0, duration: 0, playing: false, at: 1, error: null, ...reported },
+  });
+}
+
+test('a Play click the audio has not caught up with shows no autoplay hint', async () => {
+  // Wanted and not yet playing is every Play click's first half second; the
+  // hint used to flash on each one.
+  const panel = await bootPanel({ state: wantedState({}) });
+  await panel.poll();
+  assert.equal(panel.element('gesture'), null);
+});
+
+test('a refusal shows the autoplay hint, and audio that starts takes it away', async () => {
+  const panel = await bootPanel({ state: wantedState({ blocked: true }) });
+  assert.match(panel.element('gesture')?.innerHTML ?? '', /needs one interaction/);
+  assert.equal(panel.element('notices').children.length, 1, 'over the page, in the notices');
+
+  panel.state.reported = { ...panel.state.reported, playing: true, blocked: false };
+  await panel.poll();
+  assert.equal(panel.element('gesture'), null);
 });
 
 // ------------------------------------------------------------------ theme

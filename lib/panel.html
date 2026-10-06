@@ -1038,11 +1038,20 @@
         let busy = false;
         let disposed = false;
 
+        /** Start audio, and report a refusal by the autoplay policy as the engine does. */
         function attemptPlay() {
           if (busy || disposed) return;
           busy = true;
-          const done = () => { busy = false; };
-          audio.play().then(done, done);
+          audio.play().then(
+            () => {
+              busy = false;
+              report({ blocked: false });
+            },
+            (error) => {
+              busy = false;
+              if (error?.name === 'NotAllowedError') report({ blocked: true });
+            },
+          );
         }
 
         function reconcile(next) {
@@ -1188,19 +1197,16 @@
       }
 
       /**
-       * The host wants playback, and the transport's own report for *this*
-       * track says it is not playing. In practice that means the browser
-       * refused to start audio until the page has been interacted with.
+       * The host wants playback, and the transport reported that the browser
+       * refused to start it until the page is interacted with.
+       *
+       * Only the refusal counts. "Wanted but not playing" alone is also true
+       * for the half second after any Play click, before the transport has
+       * caught up — which flashed this hint on every press.
        */
       function autoplayBlocked() {
         const reported = state?.reported;
-        return Boolean(
-          state?.playing &&
-            state?.current &&
-            reported?.playing === false &&
-            Number(reported.at) > 0 &&
-            reported.trackId === state.current.id,
-        );
+        return Boolean(state?.playing && state?.current && reported?.blocked === true && reported.playing === false);
       }
 
       /**

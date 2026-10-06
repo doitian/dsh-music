@@ -765,6 +765,14 @@ in it, so nothing the listener is about to click moves when it comes or goes:
 activation for the rest of the page's life, after which agent- and DJ-initiated
 playback works without asking again. Typing in the chat counts too.
 
+The hint is driven by the refusal itself, not by a mismatch: the engine reports
+`blocked: true` when `play()` is rejected with `NotAllowedError`, and audio
+that plays clears it. "Wanted but not playing" alone is also true for the half
+second after every Play click, before the engine has caught up, and showing
+the hint on that flashed it on each press. A fixed delay would only guess at
+that window: the panel reads the host every 1.5 s, so it learns either way
+late.
+
 The engine retries on every 500 ms poll, so recovery is automatic — and it must
 be, because a refused `play()` does not change the transport revision. Gating
 the retry behind that revision (an earlier bug) left the music stopped for good,

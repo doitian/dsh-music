@@ -862,6 +862,19 @@ test('removing a queue position reports what left', () => {
   assert.equal(nowhere.snapshot.queue.length, 0);
 });
 
+test('a refused start is kept until audio plays', () => {
+  const player = new Player();
+  player.setQueue([{ id: 1, name: 'T1', artists: ['A'], duration: 1000 }]);
+  assert.equal(player.reported.blocked, false);
+
+  player.report({ trackId: 1, playing: false, blocked: true });
+  player.report({ trackId: 1, position: 0, playing: false });
+  assert.equal(player.reported.blocked, true, 'a report that does not say keeps it');
+
+  player.report({ trackId: 1, position: 10, playing: true });
+  assert.equal(player.reported.blocked, false, 'audio that plays ends it');
+});
+
 test('clearing around the playing track leaves its play open', () => {
   const player = new Player();
   const finished = [];
