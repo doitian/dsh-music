@@ -671,6 +671,14 @@ Five design notes:
   cached, and the page shows NetEase's own prose — straight away on the next
   track too, rather than a "writing" line that will come to nothing. A click
   on the written introduction, or its switch, shows NetEase's prose instead.
+- **The page follows the shell's theme.** DSH marks dark with
+  `data-ds-dark-theme` on its body and paints from token variables there; the
+  page is its own document, so it inherits neither. It carries DSH's light and
+  dark palettes (base background, primary label, scrollbar thumb) and, inside
+  DSH, takes the shell's mark and live colours — re-read whenever the shell's
+  root or body attributes change — so a theme switch, or a custom DSH theme,
+  reaches the page at once. Standalone, `prefers-color-scheme` decides. Its
+  scrollbars are DSH's too: a 5px rounded thumb on no track.
 - **The page carries its own icons.** DSH shares no icon set with plugins:
   the shell's frozen module table holds React, Cordis and its UI packages
   (`dsh-client-store`, `-ui-slots`, `-ui-primitives`, `-ui-dockkit`), and the

@@ -642,6 +642,20 @@ test('the client bundle parses and keeps the engine wiring', () => {
 
 // ------------------------------------------------------------- the panel page
 /** One fake element; only the surface the page touches. */
+/** The page's `<html>`: its theme mark and the colours set on it inline. */
+function makeRootElement() {
+  const properties = new Map();
+  return {
+    lang: '',
+    dataset: {},
+    style: {
+      setProperty: (name, value) => properties.set(name, value),
+      removeProperty: (name) => properties.delete(name),
+      getPropertyValue: (name) => properties.get(name) ?? '',
+    },
+  };
+}
+
 function makePageElement(id) {
   const classes = new Set();
   return {
@@ -772,16 +786,25 @@ async function bootPanel(options = {}) {
     addEventListener() {},
     querySelector: () => null,
     querySelectorAll: () => [],
+    documentElement: makeRootElement(),
   };
+  // `options.shell` stands in for the DSH document's theme: whether its body
+  // carries the dark mark, and the token values its computed style answers.
+  const shellBody = options.shell
+    ? { hasAttribute: (name) => name === 'data-ds-dark-theme' && Boolean(options.shell.dark) }
+    : undefined;
   const window = {
     parent: {
       __dshMusicEngine: { playback: true, apply() {}, sync() {}, position: () => 0 },
       // The page follows the shell's `<html lang>`; pin it so assertions on
       // labels do not depend on the machine's own locale.
-      document: { documentElement: { lang: options.lang ?? 'en' } },
+      document: { documentElement: { lang: options.lang ?? 'en' }, body: shellBody },
     },
     addEventListener() {},
   };
+  const getComputedStyle = (node) => ({
+    getPropertyValue: (name) => (node === shellBody ? (options.shell?.colors?.[name] ?? '') : ''),
+  });
   // The page remembers which pane the info card shows here.
   const localStorage = {
     getItem: (key) => (stored.has(key) ? stored.get(key) : null),
@@ -837,7 +860,7 @@ async function bootPanel(options = {}) {
   // A no-op `setTimeout` keeps a stray toast timer from outliving the test.
   new Function(
     'document', 'window', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'console',
-    'localStorage',
+    'localStorage', 'getComputedStyle',
     inline.at(-1)[1],
   )(
     document, window, fetch,
@@ -847,6 +870,7 @@ async function bootPanel(options = {}) {
     () => {},
     console,
     localStorage,
+    getComputedStyle,
   );
   await settle();
 
@@ -861,6 +885,7 @@ async function bootPanel(options = {}) {
     infoRequests,
     introRequests,
     storage: stored,
+    root: document.documentElement,
     element: (id) => document.getElementById(id),
     /** Run the page's 1.5 s poll once, the way the browser would. */
     async poll() {
@@ -1068,6 +1093,27 @@ test('a track change refetches and replaces the lyrics', async () => {
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456']);
   assert.match(panel.element('lyrics').innerHTML, /the next track/);
   assert.doesNotMatch(panel.element('lyrics').innerHTML, /first line/);
+});
+
+// ------------------------------------------------------------------ theme
+
+test('inside DSH the page takes the shell\'s theme and its live colours', async () => {
+  const dark = await bootPanel({
+    shell: { dark: true, colors: { '--dsw-alias-bg-base': '#151517', '--dsw-alias-label-primary': '#f9fafb', '--dsh-scrollbar-thumb': '#3c3c3d' } },
+  });
+  assert.equal(dark.root.dataset.theme, 'dark');
+  assert.equal(dark.root.style.getPropertyValue('--bg'), '#151517');
+  assert.equal(dark.root.style.getPropertyValue('--fg'), '#f9fafb');
+  assert.equal(dark.root.style.getPropertyValue('--scrollbar-thumb'), '#3c3c3d');
+  assert.equal(dark.root.style.getPropertyValue('--scrollbar-thumb-hover'), '', 'a colour the shell lacks keeps the palette\'s');
+
+  const light = await bootPanel({ shell: { dark: false } });
+  assert.equal(light.root.dataset.theme, 'light');
+});
+
+test('standalone, the page leaves the theme to the system', async () => {
+  const panel = await bootPanel();
+  assert.equal(panel.root.dataset.theme, undefined);
 });
 
 // ----------------------------------------------------------------- the hearts

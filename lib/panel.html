@@ -13,10 +13,16 @@
     <meta name="dsh-music-panel-contract" content="2" />
     <title>Music · music.163.com</title>
     <style>
+      /* DSH's light palette (base background, primary label, scrollbar). The
+         page follows the shell's theme while it sits inside DSH, and the
+         system's otherwise; see syncShellTheme. Every other colour is mixed
+         from these. */
       :root {
-        color-scheme: light dark;
-        --bg: var(--dsh-background, #ffffff);
-        --fg: var(--dsh-foreground, #1b1c1e);
+        color-scheme: light;
+        --bg: #ffffff;
+        --fg: #0f1115;
+        --scrollbar-thumb: #e5e5e5;
+        --scrollbar-thumb-hover: #d4d4d4;
         --muted: color-mix(in srgb, var(--fg) 56%, transparent);
         --faint: color-mix(in srgb, var(--fg) 38%, transparent);
         --line: color-mix(in srgb, var(--fg) 12%, transparent);
@@ -26,10 +32,23 @@
         --accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
         --radius: 12px;
         --gap: 16px;
-        /* The shell's scrollbar colours in its light theme; syncShellScrollbar
-           replaces them with the shell's live ones, which follow its theme. */
-        --scrollbar-thumb: #e5e5e5;
-        --scrollbar-thumb-hover: #d4d4d4;
+      }
+      /* DSH's dark palette: the system's choice standalone, the shell's inside DSH. */
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --bg: #151517;
+          --fg: #f9fafb;
+          --scrollbar-thumb: #3c3c3d;
+          --scrollbar-thumb-hover: #545557;
+        }
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #151517;
+        --fg: #f9fafb;
+        --scrollbar-thumb: #3c3c3d;
+        --scrollbar-thumb-hover: #545557;
       }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; }
@@ -309,7 +328,7 @@
 
       .toast {
         position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
-        background: #1b1c1e; color: #fff; padding: 8px 14px; border-radius: 9px; font-size: 12px;
+        background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 9px; font-size: 12px;
         opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 40; max-width: 80%;
       }
       .toast.on { opacity: 0.94; }
@@ -821,26 +840,39 @@
       }
 
       /** Follow the shell's language while this page lives inside it. */
+      /** The shell's colours this page takes on, by the shell's variable name. */
+      const SHELL_COLORS = [
+        ['--dsw-alias-bg-base', '--bg'],
+        ['--dsw-alias-label-primary', '--fg'],
+        ['--dsh-scrollbar-thumb', '--scrollbar-thumb'],
+        ['--dsh-scrollbar-thumb-hover', '--scrollbar-thumb-hover'],
+      ];
+
       /**
-       * Take the shell's scrollbar colours, which follow its light or dark
-       * theme, and take them again whenever the shell's root or body changes —
-       * a theme switch is an attribute on one of them.
+       * Follow the shell's theme. DSH marks dark with `data-ds-dark-theme` on
+       * its body and paints from token variables there; this page takes the
+       * mark, then the live colours, so a custom DSH theme carries over too.
+       * A theme switch rewrites those attributes and styles, so watching them
+       * catches every switch. Standalone, the system's preference decides.
        */
-      function syncShellScrollbar() {
+      function syncShellTheme() {
         try {
           const shell = window.parent?.document;
           if (!shell?.body || shell === document) return;
           const copy = () => {
+            const root = document.documentElement;
+            root.dataset.theme = shell.body.hasAttribute('data-ds-dark-theme') ? 'dark' : 'light';
             const computed = getComputedStyle(shell.body);
-            for (const [from, to] of [['--dsh-scrollbar-thumb', '--scrollbar-thumb'], ['--dsh-scrollbar-thumb-hover', '--scrollbar-thumb-hover']]) {
+            for (const [from, to] of SHELL_COLORS) {
               const value = computed.getPropertyValue(from).trim();
-              if (value) document.documentElement.style.setProperty(to, value);
+              if (value) root.style.setProperty(to, value);
+              else root.style.removeProperty(to);
             }
           };
           copy();
           if (typeof MutationObserver !== 'function') return;
           const observer = new MutationObserver(copy);
-          for (const node of [shell.documentElement, shell.body]) observer.observe(node, { attributes: true });
+          for (const node of [shell.documentElement, shell.body]) observer.observe(node, { attributes: true, attributeFilter: ['style', 'class', 'data-ds-dark-theme'] });
         } catch { /* standalone, or the shell is out of reach */ }
       }
 
@@ -2185,7 +2217,7 @@
       paintStaticIcons();
       applyLocale();
       watchShellLocale();
-      syncShellScrollbar();
+      syncShellTheme();
       refresh();
       setInterval(refresh, 1500);
       void loadModelPicker();
