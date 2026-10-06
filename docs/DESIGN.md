@@ -658,7 +658,11 @@ Five design notes:
   an answer for six hours, and the page keeps the ones it has seen. The page
   fetches and paints only the visible pane: a hidden pane is not fetched on a
   track change, and the lyrics are not highlighted while hidden, so switching
-  to a pane is what brings it up to the track.
+  to a pane is what brings it up to the track. While the details are shown,
+  the next track's are fetched on the poll after the current ones land, so
+  they paint the moment it starts; a load already in flight is shared, not
+  repeated. Shuffle has no known next track, and repeat-one's is the same one,
+  so neither fetches ahead.
 - **The introduction is written by the model, and loaded last.**
   `GET /music/api/intro/<id>?lang=en|zh` hands the details above to the DJ's
   model route — one leaf call under the DJ's identity — asking for two or

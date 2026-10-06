@@ -900,6 +900,8 @@
       let detailsRequest = 0;
       /** Details already fetched, by track id, so switching back is instant. */
       const detailsCache = new Map();
+      /** Details being fetched, by track id, so a prefetch and a load share one request. */
+      const detailsLoads = new Map();
       /**
        * Model-written introductions by `<track id>:<language>`: `'pending'`
        * while one is being written, then `{text}`, empty when none could be.
@@ -1226,6 +1228,7 @@
         // pane stayed empty forever.
         syncInfo(track?.id ?? null);
         loadIntro();
+        prefetchNextDetails();
         setIcon($('play'), state.playing ? 'pause' : 'play', { filled: true });
         $('mode').textContent = { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList');
         $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
@@ -1535,6 +1538,35 @@
         if (prose) prose.classList.toggle('open');
       };
 
+      /** One track's details, fetched once however many ask, and kept. */
+      function fetchDetails(id) {
+        if (!detailsLoads.has(id)) {
+          const load = api('/info/' + id)
+            .then((info) => {
+              detailsCache.set(id, info);
+              if (detailsCache.size > 30) detailsCache.delete(detailsCache.keys().next().value);
+              return info;
+            })
+            .finally(() => detailsLoads.delete(id));
+          detailsLoads.set(id, load);
+        }
+        return detailsLoads.get(id);
+      }
+
+      /**
+       * Fetch the next track's details ahead, so they show the moment it
+       * starts. Lazy like the introduction: only on a poll after the shown
+       * track's details have landed, and only while the details are shown.
+       * Shuffle has no known next track, and repeat-one's next is this one.
+       */
+      function prefetchNextDetails() {
+        if (infoView !== 'details' || !detailsTrackId || !detailsCache.has(detailsTrackId)) return;
+        if (!state || state.mode !== 'list') return;
+        const next = state.queue?.[state.index + 1];
+        if (!next?.id || detailsCache.has(next.id) || detailsLoads.has(next.id)) return;
+        fetchDetails(next.id).catch(() => { /* the track's own load retries */ });
+      }
+
       async function loadDetails(id) {
         const request = ++detailsRequest;
         introSource = 'ai';
@@ -1545,9 +1577,7 @@
         }
         $('details').innerHTML = `<p class="hint">${esc(t('loading'))}</p>`;
         try {
-          const info = await api('/info/' + id);
-          detailsCache.set(id, info);
-          if (detailsCache.size > 30) detailsCache.delete(detailsCache.keys().next().value);
+          const info = await fetchDetails(id);
           if (request !== detailsRequest) return;
           paintDetails(info);
         } catch (error) {

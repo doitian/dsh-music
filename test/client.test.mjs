@@ -814,9 +814,10 @@ async function bootPanel(options = {}) {
   const fetch = async (url, init) => {
     const path = String(url).replace(/^.*\/api/, '');
     requests.push(path);
-    // An introduction is fetched in the background after a render, so keeping
-    // it out of `calls` leaves `calls.at(-1)` naming what a click sent.
-    if (!path.startsWith('/intro/')) calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
+    // Details and introductions are read in the background after a render —
+    // the next track's details too — so keeping them out of `calls` leaves
+    // `calls.at(-1)` naming what a click sent.
+    if (!/^\/(info|intro)\//.test(path)) calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
     const custom = options.handle ? await options.handle(path) : null;
     if (custom) return custom;
     let body = {};
@@ -1053,6 +1054,39 @@ test('only the shown pane follows the track; the other catches up when shown', a
   panel.element('tab-lyrics').onclick();
   await settle();
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456'], 'lyrics still current are not refetched');
+});
+
+/** A playing track with two more after it, in `mode`. */
+function upNextState(mode = 'list') {
+  const track = (id) => ({ id, name: `T${id}`, artists: ['A'], album: 'X', duration: 1000, picUrl: null, vip: false });
+  const queue = [track(1), track(2), track(3)];
+  return stateDocument({ queue, index: 0, current: queue[0], mode, counts: { queued: 3, remaining: 2 } });
+}
+
+test('the next track\'s details are fetched once the shown ones land, and show the moment it starts', async () => {
+  const panel = await bootPanel({ state: upNextState() });
+  assert.deepEqual(panel.infoRequests(), ['/info/1'], 'the shown track first, alone');
+
+  await panel.poll();
+  assert.deepEqual(panel.infoRequests(), ['/info/1', '/info/2'], 'then the next one, and only the next');
+  await panel.poll();
+  assert.deepEqual(panel.infoRequests(), ['/info/1', '/info/2'], 'once');
+
+  panel.state.index = 1;
+  panel.state.current = panel.state.queue[1];
+  await panel.poll();
+  assert.match(panel.element('details').innerHTML, /<dt>Album<\/dt>/);
+  assert.deepEqual(panel.infoRequests(), ['/info/1', '/info/2', '/info/3'], 'from what was fetched ahead, and the next is fetched in turn');
+});
+
+test('nothing is fetched ahead while the lyrics are shown, or in shuffle', async () => {
+  const lyrics = await bootPanel({ state: upNextState(), storage: LYRICS_SHOWN });
+  await lyrics.poll();
+  assert.deepEqual(lyrics.infoRequests(), []);
+
+  const shuffled = await bootPanel({ state: upNextState('shuffle') });
+  await shuffled.poll();
+  assert.deepEqual(shuffled.infoRequests(), ['/info/1'], 'the next track is anyone\'s guess');
 });
 
 test('switching back to a track already seen reuses its details', async () => {
