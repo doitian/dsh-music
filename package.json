@@ -1,6 +1,6 @@
 {
   "name": "@doitian/dsh-music",
-  "version": "0.1.10",
+  "version": "1.0.0",
   "description": "NetEase Cloud Music (music.163.com) player and AI DJ for DeepSeek Harness: a sidebar page with in-app playback, QR sign-in, and agent tools that curate the queue.",
   "keywords": [
     "dsh",
