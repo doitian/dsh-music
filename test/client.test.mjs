@@ -99,6 +99,50 @@ function textResponse(body) {
   return { ok: true, status: 200, text: async () => body, json: async () => JSON.parse(body) };
 }
 
+/**
+ * A stand-in for the browser's `EventSource`, one class per harness so each
+ * test sees only the streams it opened. Tests open, push to and fail them.
+ */
+function fakeEventSource() {
+  return class FakeEventSource {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSED = 2;
+    static instances = [];
+
+    constructor(url) {
+      this.url = url;
+      this.readyState = FakeEventSource.CONNECTING;
+      this.listeners = {};
+      FakeEventSource.instances.push(this);
+    }
+
+    addEventListener(type, listener) {
+      (this.listeners[type] ??= []).push(listener);
+    }
+
+    open() {
+      this.readyState = FakeEventSource.OPEN;
+      this.onopen?.();
+    }
+
+    push(state) {
+      for (const listener of this.listeners.state ?? []) listener({ data: JSON.stringify(state) });
+    }
+
+    /** A dropped connection the browser retries, or with `closed` an error answer it gives up on. */
+    fail({ closed = false } = {}) {
+      this.readyState = closed ? FakeEventSource.CLOSED : FakeEventSource.CONNECTING;
+      this.onerror?.();
+    }
+
+    close() {
+      this.readyState = FakeEventSource.CLOSED;
+      this.closed = true;
+    }
+  };
+}
+
 /** The state document the fake host answers with. */
 function stateDocument(overrides = {}) {
   return {
@@ -132,6 +176,7 @@ async function loadClientBundle({
   playRefusals = 0,
   documentOrigin = ORIGIN,
   transport,
+  eventSource,
 } = {}) {
   const registered = [];
   const registrations = [];
@@ -156,6 +201,7 @@ async function loadClientBundle({
   globalThis.window = {
     location: { origin: documentOrigin },
     __DSH_TRANSPORT__: transport,
+    EventSource: eventSource,
     __ModuleLoader__: {
       load({ id, factory }) {
         loaded[id] = factory;
@@ -907,6 +953,165 @@ test('all three artifacts agree on the panel contract', () => {
   assert.match(ROUTER_SOURCE, /panelContract: PANEL_CONTRACT/);
 });
 
+// ------------------------------------------------------------ pushed state
+const TICK_MS = Number(/const TICK_MS = (\d+)/.exec(CLIENT_SOURCE)[1]);
+/** Outlast one turn of the engine's own clock. */
+const aTick = () => sleep(TICK_MS + 100);
+const stateReads = (harness) => harness.calls.filter((call) => call.url.endsWith('/state')).length;
+
+test('the engine follows the pushed state, and does not poll while the stream is open', async () => {
+  const EventSource = fakeEventSource();
+  const harness = await loadClientBundle({ eventSource: EventSource });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    const [stream] = EventSource.instances;
+    assert.equal(stream.url, '/music/api/events', 'same-origin, through the shell like every other request');
+    stream.open();
+    await fadeOut();
+    assert.equal(harness.audio().paused, false);
+
+    const reads = stateReads(harness);
+    await aTick();
+    assert.equal(stateReads(harness), reads, 'an open stream replaces the poll');
+
+    stream.push(stateDocument({ rev: 2, transportRev: 2, playing: false }));
+    await fadeOut();
+    assert.equal(harness.audio().paused, true, 'a pushed pause is applied without a request');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('while the stream is down the engine polls the host again', async () => {
+  const EventSource = fakeEventSource();
+  const harness = await loadClientBundle({ eventSource: EventSource });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    const [stream] = EventSource.instances;
+    stream.open();
+    stream.fail();
+
+    const reads = stateReads(harness);
+    await aTick();
+    assert.ok(stateReads(harness) > reads, 'a dropped stream falls back to reading /state');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('with the stream open, a refused play is still retried on the engine\'s own clock', async () => {
+  const EventSource = fakeEventSource();
+  const harness = await loadClientBundle({ eventSource: EventSource, playRefusals: 1 });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    EventSource.instances[0].open();
+    assert.equal(harness.playState.attempts, 1);
+    assert.equal(harness.audio().paused, true);
+
+    const reads = stateReads(harness);
+    await aTick();
+    assert.equal(harness.playState.attempts, 2, 'no frame says anything new, so the retry is local');
+    assert.equal(harness.audio().paused, false);
+    assert.equal(stateReads(harness), reads);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a report answered late cannot undo a newer pushed state', async () => {
+  const EventSource = fakeEventSource();
+  // The host's answer to a report was read before the pause below was pushed.
+  const stale = stateDocument({ rev: 3, version: 3, transportRev: 1, playing: true });
+  const harness = await loadClientBundle({
+    eventSource: EventSource,
+    fetchImpl: (href, init, { state }) => {
+      if (href.endsWith('/music/health')) return jsonResponse({ ok: true, panelContract: 2 });
+      if (href.endsWith('/report')) return jsonResponse(stale);
+      if (href.endsWith('/state')) return jsonResponse(state);
+      return jsonResponse({});
+    },
+  });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    const [stream] = EventSource.instances;
+    stream.open();
+    await fadeOut();
+
+    stream.push(stateDocument({ rev: 5, version: 5, transportRev: 2, playing: false }));
+    // The pause's fade ends in a report, whose answer still says "playing".
+    await fadeOut();
+    await aTick();
+    assert.equal(harness.audio().paused, true, 'the older answer is dropped');
+    assert.equal(globalThis.window.__dshMusicEngine.state().version, 5);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a late report cannot bring back a quality just left, though the player revision is the same', async () => {
+  // A quality change is a setting, not a player change: `rev` stays put, and
+  // only `version` tells the two answers apart.
+  const EventSource = fakeEventSource();
+  const stale = stateDocument({ rev: 4, version: 6, audio: { preferred: 'exhigh', last: null } });
+  const harness = await loadClientBundle({
+    eventSource: EventSource,
+    state: stateDocument({ rev: 4, version: 6 }),
+    fetchImpl: (href, init, { state }) => {
+      if (href.endsWith('/music/health')) return jsonResponse({ ok: true, panelContract: 2 });
+      if (href.endsWith('/report')) return jsonResponse(stale);
+      if (href.endsWith('/state')) return jsonResponse(state);
+      return jsonResponse({});
+    },
+  });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    const [stream] = EventSource.instances;
+    stream.open();
+    stream.push(stateDocument({ rev: 4, version: 7, audio: { preferred: 'lossless', last: null } }));
+    assert.match(harness.audio().src, /level=lossless$/);
+
+    // A report goes out and is answered from before the switch.
+    harness.audio().listeners.error?.forEach((listener) => listener());
+    await settle();
+    await aTick();
+    assert.match(harness.audio().src, /level=lossless$/, 'the newer quality stays');
+    assert.equal(globalThis.window.__dshMusicEngine.state().audio.preferred, 'lossless');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('the engine tells the page where playback is, and closes its stream on dispose', async () => {
+  const EventSource = fakeEventSource();
+  const harness = await loadClientBundle({ eventSource: EventSource });
+  try {
+    const dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    harness.audio().currentTime = 12.5;
+    assert.equal(globalThis.window.__dshMusicEngine.position(), 12_500);
+
+    await dispose();
+    assert.equal(EventSource.instances[0].closed, true);
+  } finally {
+    harness.restore();
+  }
+});
+
 // ------------------------------------------------------------- static checks
 test('the page defers to a usable engine, and owns audio when there is none', () => {
   // No <audio> in the markup: the element is created at runtime, and only when
@@ -1100,11 +1305,12 @@ async function bootPanel(options = {}) {
     : undefined;
   const window = {
     parent: {
-      __dshMusicEngine: { playback: true, apply() {}, sync() {}, position: () => 0 },
+      __dshMusicEngine: options.engine ?? { playback: true, apply() {}, sync() {}, position: () => 0 },
       // The page follows the shell's `<html lang>`; pin it so assertions on
       // labels do not depend on the machine's own locale.
       document: { documentElement: { lang: options.lang ?? 'en' }, body: shellBody },
     },
+    EventSource: options.EventSource,
     addEventListener() {},
   };
   const getComputedStyle = (node) => ({
@@ -1163,7 +1369,8 @@ async function bootPanel(options = {}) {
   };
 
   const inline = [...PANEL_SOURCE.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)];
-  // A no-op `setTimeout` keeps a stray toast timer from outliving the test.
+  // A no-op `setTimeout` keeps a stray toast timer from outliving the test;
+  // `options.realTimers` lets a test watch what the page defers to a timer.
   new Function(
     'document', 'window', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'console',
     'localStorage', 'getComputedStyle',
@@ -1172,7 +1379,7 @@ async function bootPanel(options = {}) {
     document, window, fetch,
     (fn, ms) => intervals.push({ fn, ms }),
     () => {},
-    () => 0,
+    options.realTimers ? (fn, ms) => setTimeout(fn, ms) : () => 0,
     () => {},
     console,
     localStorage,
@@ -1839,4 +2046,98 @@ test('an error the folded card would hide is marked on its header', async () => 
   assert.equal(panel.element('dj-model-status').textContent, 'no model service is mounted');
   assert.equal(panel.element('dj-model-warn').textContent, ' ⚠');
   assert.equal(panel.element('dj-model-warn').title, 'no model service is mounted');
+});
+
+// ---------------------------------------------------------- the page, pushed
+/** Count the writes to one property of a fake element from here on. */
+function countWrites(element, property) {
+  let value = element[property];
+  let writes = 0;
+  Object.defineProperty(element, property, {
+    configurable: true,
+    get: () => value,
+    set: (next) => {
+      writes += 1;
+      value = next;
+    },
+  });
+  return () => writes;
+}
+
+const stateReadsOf = (panel) => panel.requests.filter((path) => path === '/state').length;
+
+test('the page draws a pushed state at once, and does not poll while the stream is open', async () => {
+  const EventSource = fakeEventSource();
+  const panel = await bootPanel({ EventSource });
+  const [stream] = EventSource.instances;
+  assert.match(stream.url, /\/api\/events$/);
+  stream.open();
+
+  const reads = stateReadsOf(panel);
+  await panel.poll();
+  assert.equal(stateReadsOf(panel), reads, 'an open stream stands the poll down');
+
+  stream.push(stateDocument({ rev: 2, current: { ...panel.state.current, id: 456, name: 'Pushed' } }));
+  assert.equal(panel.element('np-title').textContent, 'Pushed');
+});
+
+test('when the stream drops, the page polls the host again', async () => {
+  const EventSource = fakeEventSource();
+  const panel = await bootPanel({ EventSource });
+  const [stream] = EventSource.instances;
+  stream.open();
+  stream.fail();
+
+  const reads = stateReadsOf(panel);
+  await panel.poll();
+  assert.equal(stateReadsOf(panel), reads + 1);
+});
+
+test('an update that changes nothing rewrites nothing', async () => {
+  const panel = await bootPanel({
+    state: {
+      ...queueState(),
+      account: { nickname: 'Listener', vip: false },
+      dj: { enabled: true, lastPlan: { added: 2, vibe: 'rain', names: ['T1', 'T2'] } },
+      boosts: [{ id: 2, name: 'T2', artists: ['A'], direction: 'more', until: Date.now() + 60 * 60_000 }],
+    },
+  });
+  const lists = ['queue', 'account', 'dj-status', 'boosts'].map((id) => [id, countWrites(panel.element(id), 'innerHTML')]);
+  const texts = ['np-title', 'np-artists', 'mode', 'counts'].map((id) => [id, countWrites(panel.element(id), 'textContent')]);
+
+  await panel.poll();
+  await panel.poll();
+  for (const [id, writes] of [...lists, ...texts]) assert.equal(writes(), 0, `#${id} is left alone`);
+
+  panel.state.queue[1].liked = true;
+  await panel.poll();
+  assert.equal(lists[0][1](), 1, 'a real change to the list is drawn');
+  assert.match(panel.element('queue').innerHTML, /class="heart on" data-like="1"/);
+  for (const [id, writes] of lists.slice(1)) assert.equal(writes(), 0, `#${id} is still left alone`);
+});
+
+test('an answer older than a pushed frame does not undo it', async () => {
+  const EventSource = fakeEventSource();
+  let stale;
+  const panel = await bootPanel({
+    EventSource,
+    handle: (path) => (path === '/control' && stale ? { ok: true, status: 200, text: async () => JSON.stringify(stale) } : null),
+  });
+  const [stream] = EventSource.instances;
+  stream.open();
+  // The same player revision: only the snapshot version orders them.
+  stale = stateDocument({ rev: 9, version: 5, current: { ...panel.state.current, name: 'Before' } });
+  stream.push(stateDocument({ rev: 9, version: 9, current: { ...panel.state.current, id: 456, name: 'After' } }));
+
+  await panel.element('play').onclick();
+  await settle();
+  assert.equal(panel.element('np-title').textContent, 'After');
+});
+
+test('the introduction and the next details follow the details without waiting for an update', async () => {
+  const panel = await bootPanel({ state: upNextState(), realTimers: true, introById: { 1: { text: 'Written.' } } });
+  await settle();
+  assert.deepEqual(panel.introRequests(), ['/intro/1?lang=en'], 'no update from the host was needed');
+  assert.deepEqual(panel.infoRequests(), ['/info/1', '/info/2']);
+  assert.match(panel.element('details').innerHTML, /Written\./);
 });
