@@ -1022,6 +1022,20 @@
       }
 
       /**
+       * Origin that serves audio bytes. Under the desktop shell this page runs on
+       * the `dsh-app://` custom scheme, which Chromium cannot byte-range, so seeks
+       * restart the track; the shell publishes its HTTP origin on the parent
+       * window instead. Without one, relative URLs keep the page's own origin.
+       */
+      function streamOrigin() {
+        try {
+          const base = window.parent?.__DSH_TRANSPORT__?.streamBaseUrl;
+          if (typeof base === 'string' && base) return new URL(base).origin;
+        } catch { /* a cross-origin parent, or a malformed base */ }
+        return '';
+      }
+
+      /**
        * The fallback transport: this page owns an `<audio>` element.
        *
        * It reconciles on `transportRev`, but enforces play/pause on every poll
@@ -1084,7 +1098,8 @@
             return;
           }
           const level = next.audio?.preferred ?? 'exhigh';
-          const key = track.id + ':' + level;
+          const base = streamOrigin();
+          const key = track.id + ':' + level + ':' + base;
           if (audio.dataset.trackKey === key) return;
 
           const sameTrack = audio.dataset.trackId === String(track.id);
@@ -1096,7 +1111,7 @@
               try { audio.currentTime = resumeAt; } catch { /* not seekable */ }
             }, { once: true });
           }
-          audio.src = BASE + '/stream/' + track.id + '?level=' + encodeURIComponent(level);
+          audio.src = base + BASE + '/stream/' + track.id + '?level=' + encodeURIComponent(level);
           audio.load();
         }
 

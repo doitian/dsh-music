@@ -636,7 +636,10 @@ Five design notes:
 - **Audio is proxied, not redirected.** CDN URLs expire after 20 minutes and
   need the session cookie at *resolution* time, so the host resolves and streams
   the bytes (cache 15 min, `Range` forwarded upstream so seeking works). It also
-  keeps playback same-origin, avoiding mixed-content and CORS entirely.
+  keeps playback on the host, avoiding mixed-content and CORS entirely. In the
+  desktop shell the `<audio>` source uses `__DSH_TRANSPORT__.streamBaseUrl`, not
+  the document's `dsh-app://` origin: Chromium cannot byte-range a custom-scheme
+  response, so a seek there restarts the track (electron/electron#38749).
 - **Playback lives in the shell document, not in the page.** The layout renders
   only the **active** `main` slot entry —
   `renderSlot('main', {}, { entryKey: activePanelId ?? 'conversation' })` — so
