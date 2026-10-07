@@ -1437,6 +1437,9 @@
         const queue = state.queue || [];
         if (queue.length === 0) {
           $('queue').innerHTML = `<div class="empty">${esc(t('queueEmpty'))}</div>`;
+          // Emptying the list dropped its scroll position, so a queue restored
+          // with the same song playing has to be revealed again.
+          revealedRow = null;
           return;
         }
         // A window of at most MAX_VISIBLE_ROWS rows that always includes the
