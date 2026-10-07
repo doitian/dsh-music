@@ -584,6 +584,81 @@ test('queue, transport and reporting round-trip through the API', async () => {
   }
 });
 
+/** Open `/music/api/events` and hand back the state frames as they arrive. */
+async function openEvents(app) {
+  const controller = new AbortController();
+  const response = await fetch(app.url('/music/api/events'), { signal: controller.signal });
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  const states = [];
+  const pump = (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        buffer += value;
+        let end;
+        while ((end = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          const data = /^event: state\ndata: (.*)$/s.exec(block);
+          if (data) states.push(JSON.parse(data[1]));
+        }
+      }
+    } catch { /* aborted */ }
+  })();
+  return {
+    response,
+    states,
+    /** Wait until `count` state frames have arrived. */
+    async until(count) {
+      const deadline = Date.now() + 2_000;
+      while (states.length < count && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(states.length >= count, `expected ${count} state frames, got ${states.length}`);
+      return states[count - 1];
+    },
+    async close() {
+      controller.abort();
+      await pump;
+    },
+  };
+}
+
+test('the state is pushed as it changes, and a playing position is not', async () => {
+  const app = await mount();
+  let events;
+  try {
+    events = await openEvents(app);
+    assert.equal(events.response.status, 200);
+    assert.match(events.response.headers.get('content-type'), /^text\/event-stream/);
+    const opening = await events.until(1);
+    assert.equal(opening.queue.length, 0, 'a client is sent the state as soon as it connects');
+    assert.equal((await app.json('/music/health')).body.eventStreams, 1, 'health counts the open streams');
+
+    await app.post('/music/api/play', { tracks: TASTE_TRACKS, startIndex: 0 });
+    const played = await events.until(2);
+    assert.equal(played.current.id, 111);
+
+    // The engine reports its position every second; none of that is news.
+    for (const position of [1000, 2000, 3000]) await app.post('/music/api/report', { trackId: 111, position, playing: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const afterReports = events.states.length;
+    assert.equal(afterReports, 3, 'only the first report, which says the audio started, is sent');
+
+    // A setting the player does not own is pushed as well, under a newer
+    // version though the player's revision is unchanged.
+    const before = (await app.json('/music/api/state')).body;
+    await app.post('/music/api/quality', { level: 'lossless' });
+    const quality = await events.until(afterReports + 1);
+    assert.equal(quality.audio.preferred, 'lossless');
+    assert.equal(quality.rev, before.rev);
+    assert.ok(quality.version > before.version, 'the version orders what the revision cannot');
+  } finally {
+    await events?.close();
+    await app.close();
+  }
+});
+
 // -------------------------------------------------------------- taste + likes
 
 /** Three tracks with distinct ids, for the taste round-trips. */

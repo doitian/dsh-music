@@ -807,6 +807,28 @@
         el.innerHTML = icon(name, options);
       }
 
+      /** The markup `setHtml` last wrote into each element. */
+      const painted = new WeakMap();
+
+      /**
+       * Replace `el`'s markup only when it differs from what was last written.
+       * Rewriting identical rows on every update replaced every node in them,
+       * which dropped hover, focus and a click caught mid-swap.
+       *
+       * @returns {boolean} whether the markup was written.
+       */
+      function setHtml(el, html) {
+        if (!el || painted.get(el) === html) return false;
+        painted.set(el, html);
+        el.innerHTML = html;
+        return true;
+      }
+
+      /** Set `el`'s text only when it changes; a rewrite clears a selection in it. */
+      function setText(el, text) {
+        if (el && el.textContent !== text) el.textContent = text;
+      }
+
       function t(key, vars) {
         let text = DICT[LANG]?.[key] ?? DICT.en[key] ?? key;
         if (vars) {
@@ -842,7 +864,7 @@
         render();
         // The taste titles carry no `data-i18n`, and `render()` needs a state
         // document, so they are painted here as well — otherwise a zh shell
-        // shows them in English until the first poll lands.
+        // shows them in English until the first state lands.
         paintTaste();
         paintDjModelHeader();
         paintDjModelToggle();
@@ -937,6 +959,30 @@
         return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
       };
       const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+      /** Whether the host's event stream is open; see the boot section. */
+      let streaming = false;
+      /** The newest snapshot version adopted; see {@link newest}. */
+      let versionFloor = 0;
+
+      /**
+       * `next`, unless it is older than the state already shown — then the
+       * state shown. A request's answer and a pushed frame travel on different
+       * connections, so one read earlier can land later, and adopting it would
+       * undo the newer one with nothing coming to repair it. Answers are
+       * ordered by `version`, which moves with anything shown — not `rev`,
+       * which a setting or a resolved like leaves alone. Only while the stream
+       * is open: without it the next poll repairs any such swap, and a
+       * reconnect drops the floor, since a restarted host counts its versions
+       * from zero again.
+       */
+      function newest(next) {
+        const version = Number(next?.version);
+        if (!Number.isFinite(version)) return next;
+        if (streaming && version < versionFloor) return state;
+        versionFloor = version;
+        return next;
+      }
 
       let toastTimer;
       function toast(message) {
@@ -1043,7 +1089,7 @@
       /**
        * The fallback transport: this page owns an `<audio>` element.
        *
-       * It reconciles on `transportRev`, but enforces play/pause on every poll
+       * It reconciles on `transportRev`, but enforces play/pause on every update
        * — a refused `play()` does not change the revision, so gating the retry
        * would stop the music for good after the first browser refusal.
        */
@@ -1165,7 +1211,7 @@
         }
 
         /**
-         * Pick the resource to play. Every poll, not just on a transport change:
+         * Pick the resource to play. Every update, not just on a transport change:
          * the resource identity includes the streaming quality, so a quality
          * switch has to be noticed without waiting for the revision to move.
          * The level rides in the URL because the same track at two levels is two
@@ -1229,7 +1275,7 @@
                 ...extra,
               },
             });
-          } catch { /* the host will be re-read on the next poll */ }
+          } catch { /* the next update carries the host's view */ }
         }
 
         audio.addEventListener('ended', () => {
@@ -1275,14 +1321,14 @@
         } catch { /* a failing transport must not break rendering */ }
       }
 
-      /** Ask the active transport to act now instead of on its next poll. */
+      /** Ask the active transport to act now instead of on its next update. */
       function pokeEngine() {
         try { transport().sync?.(); } catch { /* best effort across documents */ }
       }
 
       async function control(body) {
         try {
-          state = await api('/control', { method: 'POST', body });
+          state = newest(await api('/control', { method: 'POST', body }));
           render();
           applyTransport();
         } catch (error) { toast(error.message); }
@@ -1292,9 +1338,11 @@
       /**
        * Playback position.
        *
-       * A local element knows exactly; the shell engine reports about once a
-       * second, which is too coarse for a smooth bar, so the time since its
-       * report is added back.
+       * The transport reads its own element when it can — the local one, and
+       * the shell engine, whose document this page can reach. An engine from
+       * an older bundle has no `position()`, so its last report to the host is
+       * used, with the time since added back; the host pushes no frame for a
+       * report that only moves the position, so that report can be minutes old.
        */
       function positionMs() {
         const active = transport();
@@ -1349,13 +1397,18 @@
       function render() {
         if (!state) return;
         const track = state.current;
-        $('cover').src = track?.picUrl || '';
-        $('cover').style.visibility = track?.picUrl ? 'visible' : 'hidden';
-        $('np-title').textContent = track ? track.name : t('nothingPlaying');
-        $('np-artists').textContent = track ? (track.artists || []).join(' / ') : '';
-        $('np-album').textContent = track ? track.album || '' : '';
+        const cover = track?.picUrl || '';
+        // Setting the same `src` again restarts the image load.
+        if ($('cover').dataset.src !== cover) {
+          $('cover').dataset.src = cover;
+          $('cover').src = cover;
+        }
+        $('cover').style.visibility = cover ? 'visible' : 'hidden';
+        setText($('np-title'), track ? track.name : t('nothingPlaying'));
+        setText($('np-artists'), track ? (track.artists || []).join(' / ') : '');
+        setText($('np-album'), track ? track.album || '' : '');
         // Details and lyrics belong to the track, and this page fetches them
-        // itself on every poll — not from the local transport's `applySource`,
+        // itself on every update — not from the local transport's `applySource`,
         // which only ever runs when this page owns the audio element. In the
         // normal case the shell engine plays, so that path is dead and the
         // pane stayed empty forever.
@@ -1363,8 +1416,7 @@
         loadIntro();
         prefetchNextDetails();
         setIcon($('play'), state.playing ? 'pause' : 'play', { filled: true });
-        $('mode').textContent = { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList');
-        $('counts').textContent = state.counts ? `(${state.counts.queued})` : '';
+        setText($('mode'), { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList'));
         $('queue-clear').disabled = (state.queue?.length ?? 0) <= (state.current ? 1 : 0);
         $('dj-toggle').classList.toggle('on', Boolean(state.dj?.enabled));
         paintHistory();
@@ -1374,21 +1426,23 @@
 
         // Account chip
         const account = state.account;
-        $('account').innerHTML = account
+        const chip = account
           ? `${account.avatar ? `<img src="${esc(account.avatar)}" alt="">` : ''}<span>${esc(account.nickname)}${account.vip ? ' · VIP' : ''}</span>`
           : `<button id="signin">${esc(t('signin'))}</button>`;
-        const signin = $('signin');
-        if (signin) signin.onclick = openLogin;
+        if (setHtml($('account'), chip)) {
+          const signin = $('signin');
+          if (signin) signin.onclick = openLogin;
+        }
 
         // DJ status
         const dj = state.dj || {};
-        $('dj-status').innerHTML = dj.enabled || dj.lastPlan
+        setHtml($('dj-status'), dj.enabled || dj.lastPlan
           ? `<div class="plan">${dj.busy ? esc(t('djPlanning')) : dj.error ? `AI DJ: ${esc(dj.error)}` : ''}${
               dj.lastPlan
                 ? `<div><b>+${dj.lastPlan.added}</b> ${esc(dj.lastPlan.vibe || '')}</div><div class="muted">${esc((dj.lastPlan.names || []).slice(-3).join(' · '))}</div>`
                 : ''
             }${dj.modelError && !dj.lastPlan?.route ? `<div class="muted">${esc(t('modelTierUnavailable'))}: ${esc(dj.modelError)}</div>` : ''}${dj.lastPlan?.source === 'heuristic' ? `<div class="muted">${esc(t('heuristics'))}</div>` : ''}</div>`
-          : '';
+          : '');
 
         if (autoplayBlocked()) {
           if (!$('gesture')) {
@@ -1435,12 +1489,15 @@
       function renderQueue() {
         if (!state) return;
         const queue = state.queue || [];
+        const total = state.counts ? `(${state.counts.queued})` : '';
         if (queue.length === 0) {
-          $('queue').innerHTML = `<div class="empty">${esc(t('queueEmpty'))}</div>`;
+          setText($('counts'), total);
           // Emptying the list dropped its scroll position, so a queue restored
           // with the same song playing has to be revealed again.
-          revealedRow = null;
-          revealing = null;
+          if (setHtml($('queue'), `<div class="empty">${esc(t('queueEmpty'))}</div>`)) {
+            revealedRow = null;
+            revealing = null;
+          }
           return;
         }
         // A window of at most MAX_VISIBLE_ROWS rows that always includes the
@@ -1450,10 +1507,8 @@
         const cursor = state.index < 0 ? 0 : state.index;
         const start = Math.max(0, Math.min(cursor - 4, queue.length - MAX_VISIBLE_ROWS));
         const end = Math.min(queue.length, start + MAX_VISIBLE_ROWS);
-        if (end - start < queue.length) {
-          $('counts').textContent = `(${start + 1}–${end} / ${queue.length})`;
-        }
-        $('queue').innerHTML = queue
+        setText($('counts'), end - start < queue.length ? `(${start + 1}–${end} / ${queue.length})` : total);
+        setHtml($('queue'), queue
           .slice(start, end)
           .map((track, offset) => {
             const index = start + offset;
@@ -1468,7 +1523,7 @@
               <span class="acts"><button data-remove="${index}" title="${esc(t('remove'))}">${icon('x', { small: true })}</button></span>
             </div>`;
           })
-          .join('');
+          .join(''));
         revealPlayingRow();
       }
 
@@ -1490,12 +1545,12 @@
       /**
        * Bring the playing row into the queue's view when a new song starts.
        *
-       * Only on a change of song: every poll repaints the list, and scrolling
-       * then would yank it back while the user browses what comes next. Only the
-       * list itself scrolls — stacked in a narrow window the list does not
-       * scroll on its own, and moving the whole page for it would lose whatever
-       * the user is reading on the stage. A row already in view stays put; the
-       * first paint jumps, later songs glide.
+       * Only on a change of song: the list is re-rendered on every update, and
+       * scrolling then would yank it back while the user browses what comes
+       * next. Only the list itself scrolls — stacked in a narrow window the list
+       * does not scroll on its own, and moving the whole page for it would lose
+       * whatever the user is reading on the stage. A row already in view stays
+       * put; the first paint jumps, later songs glide.
        */
       function revealPlayingRow() {
         const list = $('queue');
@@ -1590,7 +1645,7 @@
       function paintBoosts() {
         const boosts = state?.boosts ?? [];
         const now = Date.now();
-        $('boosts').innerHTML = boosts.length
+        setHtml($('boosts'), boosts.length
           ? `<span>${esc(t('boostsTitle'))}:</span>` +
             boosts
               .map((boost) => {
@@ -1598,14 +1653,14 @@
                 return `<span class="boost">${icon(boost.direction === 'more' ? 'more' : 'less', { small: true })} ${esc(boost.name)} · ${esc(t('boostMinutes', { n: minutes }))}<button data-unboost="${boost.id}" title="${esc(t('boostClear'))}">${icon('x', { small: true })}</button></span>`;
               })
               .join('')
-          : '';
+          : '');
       }
 
       /** Boost a track, or clear its boost with `none`, and adopt the host's answer. */
       async function sendBoost(trackId, direction, button) {
         if (button) button.disabled = true;
         try {
-          state = await api('/boost', { method: 'POST', body: { trackId, direction } });
+          state = newest(await api('/boost', { method: 'POST', body: { trackId, direction } }));
           render();
           applyTransport();
           toast(t(direction === 'more' ? 'boostedMore' : direction === 'less' ? 'boostedLess' : 'boostCleared'));
@@ -1637,7 +1692,7 @@
         // mid-flight is locked out, exactly as the transport switchers do.
         if (button) button.disabled = true;
         try {
-          state = await api('/queue', { method: 'POST', body: { action: 'remove', index } });
+          state = newest(await api('/queue', { method: 'POST', body: { action: 'remove', index } }));
           // Read the answer off the new queue: an index that named a row someone
           // else had already dropped must not claim a removal that did not happen.
           return !(state.queue || []).some((entry) => entry.id === track.id);
@@ -1663,7 +1718,7 @@
         // promised.
         if (button) button.disabled = true;
         try {
-          state = await api('/taste', { method: 'POST', body: { trackId: track.id, level } });
+          state = newest(await api('/taste', { method: 'POST', body: { trackId: track.id, level } }));
           render();
           applyTransport();
           return true;
@@ -1684,8 +1739,8 @@
         if (document.activeElement !== $('seek')) {
           $('seek').value = duration > 0 ? String(Math.round((position / duration) * 1000)) : '0';
         }
-        $('t-cur').textContent = fmt(position);
-        $('t-dur').textContent = fmt(duration);
+        setText($('t-cur'), fmt(position));
+        setText($('t-dur'), fmt(duration));
       }
 
       // ------------------------------------------------------ details + lyrics
@@ -1778,8 +1833,8 @@
 
       /**
        * Fetch the next track's details ahead, so they show the moment it
-       * starts. Lazy like the introduction: only on a poll after the shown
-       * track's details have landed, and only while the details are shown.
+       * starts. Lazy like the introduction: only after the shown track's
+       * details have painted, and only while the details are shown.
        * Shuffle has no known next track, and repeat-one's next is this one.
        */
       function prefetchNextDetails() {
@@ -1796,6 +1851,7 @@
         const cached = detailsCache.get(id);
         if (cached) {
           paintDetails(cached);
+          setTimeout(afterDetails);
           return;
         }
         $('details').innerHTML = `<p class="hint">${esc(t('loading'))}</p>`;
@@ -1803,10 +1859,22 @@
           const info = await fetchDetails(id);
           if (request !== detailsRequest) return;
           paintDetails(info);
+          setTimeout(afterDetails);
         } catch (error) {
           if (request !== detailsRequest) return;
           $('details').innerHTML = `<p class="hint">${esc(error.message)}</p>`;
         }
+      }
+
+      /**
+       * What waits for the details to paint: the introduction and the next
+       * track's details. Its own turn, so neither is asked for before the
+       * facts are on screen, and not tied to the next update from the host,
+       * which may be minutes away now that it only comes on a change.
+       */
+      function afterDetails() {
+        loadIntro();
+        prefetchNextDetails();
       }
 
       /** Paint the shown track's details again: a language switch, an introduction, the switch. */
@@ -1818,8 +1886,8 @@
       /**
        * Ask for the shown track's introduction, once its details are painted.
        *
-       * Lazy on purpose: a model call takes seconds, so it waits for the poll
-       * after the details land — playback and the NetEase facts never wait on
+       * Lazy on purpose: a model call takes seconds, so it waits until the
+       * details have painted — playback and the NetEase facts never wait on
        * it — and it is asked only for the track the visible pane shows.
        */
       async function loadIntro() {
@@ -2232,7 +2300,7 @@
 
       async function saveModelRoute(provider, model, message) {
         try {
-          state = await api('/dj', { method: 'POST', body: { provider, model } });
+          state = newest(await api('/dj', { method: 'POST', body: { provider, model } }));
           render();
           await loadModelPicker();
           toast(message);
@@ -2306,12 +2374,12 @@
         const last = state?.audio?.last;
         const preferred = state?.audio?.preferred;
         if (!last || (preferred && last.requested !== preferred && last.trackId !== state?.current?.id)) {
-          $('quality-info').textContent = '';
+          setText($('quality-info'), '');
           return;
         }
         const kbps = last.br ? ` · ${Math.round(last.br / 1000)} kbps` : '';
-        $('quality-info').textContent =
-          `▶ ${String(last.type ?? '').toUpperCase()}${kbps}` + (last.downgraded ? ` (${last.served}, ${t('downgraded')})` : '');
+        setText($('quality-info'),
+          `▶ ${String(last.type ?? '').toUpperCase()}${kbps}` + (last.downgraded ? ` (${last.served}, ${t('downgraded')})` : ''));
       }
 
       async function loadQuality() {
@@ -2331,7 +2399,7 @@
 
       $('quality').onchange = async (event) => {
         try {
-          state = await api('/quality', { method: 'POST', body: { level: event.target.value } });
+          state = newest(await api('/quality', { method: 'POST', body: { level: event.target.value } }));
           render();
           applyTransport();
           pokeEngine();
@@ -2404,7 +2472,7 @@
         const button = event?.currentTarget;
         if (button) button.disabled = true;
         try {
-          state = await api('/scrobble', { method: 'POST', body: { enabled: next } });
+          state = newest(await api('/scrobble', { method: 'POST', body: { enabled: next } }));
           render();
           toast(t(next ? 'scrobbleOn' : 'scrobbleOff'));
         } catch (error) {
@@ -2417,17 +2485,17 @@
       $('dj-toggle').onclick = async () => {
         try {
           const data = await api('/dj', { method: 'POST', body: { enabled: !state?.dj?.enabled, prompt: $('dj-prompt').value } });
-          state = data;
+          state = newest(data);
           render();
           toast(state.dj?.enabled ? t('djOn') : t('djOff'));
         } catch (error) { toast(error.message); }
       };
-      $('dj-prompt').onchange = () => api('/dj', { method: 'POST', body: { prompt: $('dj-prompt').value, enabled: state?.dj?.enabled } }).then((data) => { state = data; render(); }).catch((error) => toast(error.message));
+      $('dj-prompt').onchange = () => api('/dj', { method: 'POST', body: { prompt: $('dj-prompt').value, enabled: state?.dj?.enabled } }).then((data) => { state = newest(data); render(); }).catch((error) => toast(error.message));
 
       // Not row-by-row removal, which reads each row as a dislike.
       $('queue-clear').onclick = async () => {
         try {
-          state = await api('/queue', { method: 'POST', body: { action: 'clear', keepCurrent: true } });
+          state = newest(await api('/queue', { method: 'POST', body: { action: 'clear', keepCurrent: true } }));
           render();
           pokeEngine();
         } catch (error) { toast(failureText(error)); }
@@ -2451,7 +2519,7 @@
             // The confirm names the click, not that side effect of it.
             if (await removeFromList(Number(remove.dataset.remove), remove)) toast(t('removed'));
           } else if (jump !== undefined) {
-            state = await api('/queue', { method: 'POST', body: { action: 'jump', index: Number(jump) } });
+            state = newest(await api('/queue', { method: 'POST', body: { action: 'jump', index: Number(jump) } }));
           } else return;
           render();
           pokeEngine();
@@ -2459,14 +2527,57 @@
       };
 
       // ------------------------------------------------------------------ boot
+      /**
+       * The host pushes its state over `/events` whenever something here would
+       * change. `/state` is re-read every `POLL_MS` only while that stream is
+       * down — a browser without EventSource, a host that predates the route,
+       * a reconnect under way — and every `STREAM_POLL_MS` while it is up, as
+       * a safety net that also ages the boosts' minutes left.
+       */
+      const POLL_MS = 1500;
+      const STREAM_POLL_MS = 30_000;
+      /** A stream the browser gave up on (an error answer) is opened again after this. */
+      const RELISTEN_MS = 10_000;
+      let events = null;
+      let receivedAt = 0;
+
+      function adopt(next) {
+        receivedAt = Date.now();
+        if (newest(next) !== next) return;
+        state = next;
+        render();
+        applyTransport();
+      }
+
       async function refresh() {
         try {
-          state = await api('/state');
-          render();
-          applyTransport();
+          adopt(await api('/state'));
         } catch (error) {
-          $('np-title').textContent = t('connectFailed') + error.message;
+          setText($('np-title'), t('connectFailed') + error.message);
         }
+      }
+
+      function listen() {
+        const Source = window.EventSource;
+        if (typeof Source !== 'function') return;
+        events = new Source(API + '/events');
+        events.onopen = () => {
+          streaming = true;
+          // The host may have restarted, and its versions with it.
+          versionFloor = 0;
+        };
+        events.onerror = () => {
+          streaming = false;
+          // A dropped connection is retried by the browser; an error status
+          // closes the stream for good, so it is opened again from here.
+          if (events.readyState === Source.CLOSED) {
+            events = null;
+            setTimeout(listen, RELISTEN_MS);
+          }
+        };
+        events.addEventListener('state', (event) => {
+          try { adopt(JSON.parse(event.data)); } catch { /* the next frame or poll repairs it */ }
+        });
       }
 
       paintStaticIcons();
@@ -2474,14 +2585,23 @@
       watchShellLocale();
       syncShellTheme();
       refresh();
-      setInterval(refresh, 1500);
+      listen();
+      setInterval(() => {
+        if (!streaming || Date.now() - receivedAt >= STREAM_POLL_MS) refresh();
+        // A refused play changes nothing on the host, so no update would come
+        // to retry it: a page that owns its audio retries on this clock.
+        else applyTransport();
+      }, POLL_MS);
       void loadModelPicker();
       void loadQuality();
-      // Progress and lyric highlighting interpolate locally between the
-      // engine's reports, so they need their own repaint clock now that the
-      // audio element lives in the shell document.
+      // Progress and lyric highlighting follow the audio element, which lives
+      // in the shell document and reports nothing here, so they need their own
+      // repaint clock.
       setInterval(() => { paintProgress(); paintLyrics(); }, 250);
-      window.addEventListener('beforeunload', () => { clearInterval(qrTimer); });
+      window.addEventListener('beforeunload', () => {
+        clearInterval(qrTimer);
+        events?.close();
+      });
     </script>
   </body>
 </html>

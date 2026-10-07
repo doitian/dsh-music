@@ -70,7 +70,7 @@ Two implementation details worth knowing:
   browser range-requests the other would corrupt the byte stream.
 - **Switching quality mid-track loads a fresh resource and resumes in place**,
   restoring the position from the previous file once metadata arrives, rather
-  than restarting the song. The resource check runs on every poll, not behind
+  than restarting the song. The resource check runs on every update, not behind
   the transport-revision gate — quality is not a one-shot transport change, and
   gating it meant a switch did nothing until something else moved the revision.
 
@@ -95,7 +95,7 @@ needs are both plain endpoints:
 - `POST /api/song/like` — one of the few *write* endpoints the web API still
   serves unencrypted, so no `weapi` client is needed. It takes the direction
   rather than toggling: the page always says which level it wants, so a stale
-  poll cannot turn a click into the wrong one, and disliking a liked track is one
+  state cannot turn a click into the wrong one, and disliking a liked track is one
   request instead of two racing ones.
 - `GET /api/song/like/check` — which of a batch of ids are liked. The answer is
   cached per track (5 minutes), so a whole queue's hearts cost one request, and
@@ -617,6 +617,7 @@ browser (DSH web GUI, http://127.0.0.1:<port>)
                                             │  fetch (same origin)
                                             ▼
                                       /music/api/*          (JSON)
+                                      /music/api/events     (state, pushed on change)
                                       /music/stream/<id>    (audio bytes)
                                             │
                         host plugin  ───────┘
@@ -628,10 +629,11 @@ browser (DSH web GUI, http://127.0.0.1:<port>)
                           ├─ lib/dj.js        candidate pool + model/heuristic tiers
                           ├─ lib/cache.js     source cache, pool sampling, request pacing
                           ├─ lib/likes.js     the account's like state, cached
-                          └─ lib/router.js    JSON API, HTML, Range-capable audio proxy
+                          ├─ lib/router.js    JSON API, HTML, Range-capable audio proxy
+                          └─ lib/feed.js      the state as an event stream, sent on change
 ```
 
-Five design notes:
+Six design notes:
 
 - **Audio is proxied, not redirected.** CDN URLs expire after 20 minutes and
   need the session cookie at *resolution* time, so the host resolves and streams
@@ -647,12 +649,37 @@ Five design notes:
   `<audio>` owned by that page would stop the music, which is exactly what
   happened before contract 2. The engine is created on the client plugin's own
   lifetime, survives every panel switch, and the page is a remote control:
-  `window.__dshMusicEngine.sync()` applies a command without waiting for the
-  next poll. A `panelContract` value on `/music/health` keeps a half-updated
+  `window.__dshMusicEngine.sync()` applies a command at once, and
+  `position()` reads the element for the page's progress bar. A
+  `panelContract` value on `/music/health` keeps a half-updated
   browser (new bundle, old host) from playing every track twice.
 - **The host owns the desired state; the engine owns the audio element.** They
   reconcile through `rev` / `transportRev` counters, so agent tools, the page,
   and the DJ all drive one state machine instead of three.
+- **State is pushed, not polled.** `GET /music/api/events` is an event stream
+  that the page and the engine each hold open; the host writes the whole
+  snapshot to it whenever something either would show or act on changes.
+  Changes are found by comparing snapshots, not by trusting every mutation to
+  announce itself, because the snapshot draws on the session store, the like
+  cache and the stream resolver as well as the player. A player bump or any API
+  write triggers a comparison, and a 5 s sweep catches what announces nothing:
+  a boost running out, a like resolved in the background, a sign-in from an
+  agent tool. The comparison leaves out the position and its timestamp, so the
+  engine's once-a-second report sends nothing while a track plays. The page
+  re-reads `/state` every 1.5 s only while the stream is down (and every 30 s
+  as a safety net), and the engine every 500 ms. Both still keep a local
+  clock: a refused `play()` is news to nobody, so it is retried there. A
+  request's answer and a pushed frame travel on different connections, so
+  each side drops a state older than the newest it has adopted. Every
+  snapshot carries a `version` for this, which moves whenever anything shown
+  moves; the player's `rev` cannot order them, since a streaming quality, a
+  setting or a resolved like changes the snapshot without bumping it. The page
+  writes an element's markup only when it differs from what it last wrote, so
+  an update that changes one heart redraws the list once, and one that changes
+  nothing leaves hover, focus and a click under way alone. In the desktop
+  shell the stream rides the `dsh-app://` forwarder, which passes the
+  response body through as it arrives; a 25 s comment keeps that forwarding
+  fetch, and any idle proxy, from timing it out.
 - **Details and lyrics share one card, and only the one shown is kept
   current.** `GET /music/api/info/<id>` gathers the song detail, its album
   page, the music wiki (音乐百科: genre, tags, language, BPM, awards, where it
@@ -662,7 +689,7 @@ Five design notes:
   fetches and paints only the visible pane: a hidden pane is not fetched on a
   track change, and the lyrics are not highlighted while hidden, so switching
   to a pane is what brings it up to the track. While the details are shown,
-  the next track's are fetched on the poll after the current ones land, so
+  the next track's are fetched once the current ones have painted, so
   they paint the moment it starts; a load already in flight is shared, not
   repeated. Shuffle has no known next track, and repeat-one's is the same one,
   so neither fetches ahead.
@@ -670,8 +697,8 @@ Five design notes:
   `GET /music/api/intro/<id>?lang=en|zh` hands the details above to the DJ's
   model route — one leaf call under the DJ's identity — asking for two or
   three short paragraphs grounded in NetEase's material, in the panel's
-  language. The page asks for it only on the poll after the details have
-  painted, and only for the track the visible pane shows, so neither
+  language. The page asks for it only once the details have painted, and
+  only for the track the visible pane shows, so neither
   playback nor the NetEase facts wait on a model call. A written introduction
   is cached for a week per track and language; with no model, or a failed
   call, the route answers an empty `text` (never an error), nothing is
@@ -773,11 +800,12 @@ The hint is driven by the refusal itself, not by a mismatch: the engine reports
 that plays clears it. "Wanted but not playing" alone is also true for the half
 second after every Play click, before the engine has caught up, and showing
 the hint on that flashed it on each press. A fixed delay would only guess at
-that window: the panel reads the host every 1.5 s, so it learns either way
-late.
+that window; the refusal itself reaches the page as soon as the engine reports
+it, pushed like any other change.
 
-The engine retries on every 500 ms poll, so recovery is automatic — and it must
-be, because a refused `play()` does not change the transport revision. Gating
+The engine retries on its own 500 ms clock, against the state it already holds,
+so recovery is automatic — and it must be, because a refused `play()` does not
+change the transport revision, so the host has no new state to push. Gating
 the retry behind that revision (an earlier bug) left the music stopped for good,
 with the hint showing and pressing it doing nothing.
 
@@ -797,7 +825,7 @@ down first. A restart brings both halves back into agreement.
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 189 deterministic tests: pure, source cache, like state, DJ, browser half
+npm test             # 252 deterministic tests: pure, source cache, like state, DJ, browser half, event stream
 npm run test:live    # 40 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -844,8 +872,10 @@ DOM (fake `window`, `document`, `fetch`), which is how the central property is
 proven: **the engine creates and drives the `<audio>` element with no React
 component ever rendered**, so playback cannot depend on the Music page being
 mounted. They also cover the seek handshake, the volume fades around play,
-pause, and seek (a burst of seeks lands once), failure reporting, disposal, and
-the contract handshake.
+pause, and seek (a burst of seeks lands once), failure reporting, disposal, the
+contract handshake, and the event stream: a pushed state is applied with no
+request, the poll comes back only while the stream is down, a refused play is
+still retried locally, and a late report answer cannot undo a newer frame.
 
 The same fake DOM boots `lib/panel.html` itself, with an engine that reports
 `playback: true` — the shell document owns the audio element. That is the case
@@ -853,11 +883,17 @@ where the page must fetch everything it renders on its own: lyrics used to be
 requested only from the local fallback transport's `applySource`, so with the
 engine playing the pane stayed empty for every track. Three tests hold the
 line: the rendered track is asked for, one fetch per track rather than one per
-poll, and a track change replaces the pane. The details pane, shown by default,
+update, and a track change replaces the pane. The details pane, shown by default,
 holds the same line, and the tests also check that a hidden pane is neither
-fetched nor kept current until it is shown again.
+fetched nor kept current until it is shown again. Others check that an update
+changing nothing rewrites no markup, and that the introduction follows the
+details without waiting for the host to push again.
 
-`npm test` runs the six deterministic files in sequence (`npm run test:all`
+`test/feed.test.mjs` drives the event stream against stand-in requests: one
+frame per burst of changes, none for a position report, a newcomer's first
+state without a resend to the others, and the sweep and heartbeat.
+
+`npm test` runs the seven deterministic files in sequence (`npm run test:all`
 adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which
 is blocked in sandboxed environments.
 
