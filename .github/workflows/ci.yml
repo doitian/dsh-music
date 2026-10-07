@@ -27,25 +27,29 @@ jobs:
       - name: Deterministic suites (no network)
         run: npm test
 
+      # The expected list derives from git and package.json rather than being
+      # written out here, so a module added to lib/ is checked without anyone
+      # remembering to list it. Node reads the pack JSON from stdin so the same
+      # lines also run under Git Bash, where a /tmp path would not resolve.
       - name: Check what the tarball would actually contain
         run: |
-          npm pack --dry-run 2>&1 | tee "$RUNNER_TEMP/pack.txt"
-          for required in \
-            cordis.patch.yml \
-            icon.svg \
-            lib/index.js \
-            lib/client.js \
-            lib/netease.js \
-            lib/session.js \
-            lib/state.js \
-            lib/dj.js \
-            lib/router.js \
-            lib/panel.html \
-            lib/vendor/qrcode.js
-          do
-            grep -q "$required" "$RUNNER_TEMP/pack.txt" \
-              || { echo "::error::$required is missing from the published tarball"; exit 1; }
+          npm pack --dry-run --json \
+            | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].files.map(f => f.path).join("\n")' \
+            | sort -u > "$RUNNER_TEMP/packed.txt"
+          cat "$RUNNER_TEMP/packed.txt"
+          {
+            git ls-files lib
+            node -p '
+              const p = require("./package.json");
+              const targets = t => typeof t === "string" ? [t] : Object.values(t ?? {}).flatMap(targets);
+              [p.main, p.icon, ...targets(p.exports)].filter(Boolean).map(f => f.replace(/^\.\//, "")).join("\n")
+            '
+          } | sort -u > "$RUNNER_TEMP/expected.txt"
+          missing=$(comm -23 "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/packed.txt")
+          for required in $missing; do
+            echo "::error::$required is missing from the published tarball"
           done
+          [ -z "$missing" ]
 
 # The integration suite that drives the real NetEase API lives in live.yml, not
 # here: GitHub's runners cannot reach music.163.com, so running it on every push
