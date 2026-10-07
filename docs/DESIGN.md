@@ -843,7 +843,8 @@ The browser-half tests execute `lib/client.js` for real against a minimal fake
 DOM (fake `window`, `document`, `fetch`), which is how the central property is
 proven: **the engine creates and drives the `<audio>` element with no React
 component ever rendered**, so playback cannot depend on the Music page being
-mounted. They also cover the seek handshake, failure reporting, disposal, and
+mounted. They also cover the seek handshake, the volume fades around play,
+pause, and seek (a burst of seeks lands once), failure reporting, disposal, and
 the contract handshake.
 
 The same fake DOM boots `lib/panel.html` itself, with an engine that reports

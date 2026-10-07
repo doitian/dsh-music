@@ -926,6 +926,11 @@
       const DJ_MODEL_PREF = 'dsh-music.djmodel.expanded';
       let djModelExpanded = readDjModelPref();
       let volumePostAt = 0;
+      /** Volume fades and the seek debounce, matching the shell engine's. */
+      const FADE_MS = 300;
+      const SEEK_FADE_MS = 120;
+      const SEEK_SETTLE_MS = 400;
+      const FADE_STEP_MS = 16;
 
       const fmt = (ms) => {
         const total = Math.max(Math.floor((ms || 0) / 1000), 0);
@@ -1051,14 +1056,96 @@
         let applied = -1;
         let busy = false;
         let disposed = false;
+        /** Fades work as in the shell engine: the element plays at `level * gain`. */
+        let level = 1;
+        let gain = 1;
+        let fade = null;
+        let pausing = false;
+        let seekTarget = null;
+        let hold = null;
+
+        function applyVolume() {
+          audio.volume = Math.min(Math.max(level * gain, 0), 1);
+        }
+
+        /** Ease `gain` to `to` by the clock, then call `done`; a new fade replaces the running one. */
+        function fadeTo(to, ms, done) {
+          clearInterval(fade?.timer);
+          clearTimeout(hold);
+          hold = null;
+          const from = gain;
+          const start = Date.now();
+          const span = Math.abs(to - from) * ms;
+          const current = { to, timer: 0 };
+          const step = () => {
+            const progress = span > 0 ? Math.min((Date.now() - start) / span, 1) : 1;
+            gain = from + (to - from) * progress;
+            applyVolume();
+            if (progress < 1) return;
+            clearInterval(current.timer);
+            if (fade === current) fade = null;
+            done?.();
+          };
+          current.timer = setInterval(step, FADE_STEP_MS);
+          fade = current;
+          step();
+        }
+
+        function land() {
+          if (seekTarget === null) return;
+          try { audio.currentTime = seekTarget; } catch { /* not seekable yet */ }
+          seekTarget = null;
+        }
+
+        /** Fade to silence and wait for the seeks to settle; called again while silent, it restarts the wait. */
+        function holdForSeek() {
+          fadeTo(0, SEEK_FADE_MS, () => {
+            hold = setTimeout(() => {
+              land();
+              fadeTo(1, SEEK_FADE_MS);
+            }, SEEK_SETTLE_MS);
+          });
+        }
+
+        function seek(seconds) {
+          seekTarget = seconds;
+          if (audio.paused) land();
+          else if (fade?.to !== 0) holdForSeek();
+        }
+
+        function fadeOutAndPause() {
+          if (pausing) return;
+          pausing = true;
+          fadeTo(0, FADE_MS, () => {
+            pausing = false;
+            land();
+            audio.pause();
+          });
+        }
+
+        function cancelPause() {
+          pausing = false;
+          if (seekTarget !== null) holdForSeek();
+          else fadeTo(1, FADE_MS);
+        }
 
         /** Start audio, and report a refusal by the autoplay policy as the engine does. */
         function attemptPlay() {
           if (busy || disposed) return;
+          // A repeated `playNow()` must not restart the fade of audio already playing.
+          if (!audio.paused) {
+            if (pausing) cancelPause();
+            return;
+          }
           busy = true;
+          pausing = false;
+          fadeTo(0, 0);
+          land();
           audio.play().then(
             () => {
               busy = false;
+              // A seek that arrived while play() was pending owns the fade-in.
+              if (seekTarget === null) fadeTo(1, FADE_MS);
               report({ blocked: false });
             },
             (error) => {
@@ -1072,7 +1159,7 @@
           if (!next || next.transportRev === applied) return;
           applied = next.transportRev;
           if (next.pendingSeek !== null && next.pendingSeek !== undefined) {
-            try { audio.currentTime = next.pendingSeek / 1000; } catch { /* not seekable yet */ }
+            seek(next.pendingSeek / 1000);
             api('/seek-consumed', { method: 'POST', body: {} }).catch(() => {});
           }
         }
@@ -1103,7 +1190,9 @@
           if (audio.dataset.trackKey === key) return;
 
           const sameTrack = audio.dataset.trackId === String(track.id);
-          const resumeAt = sameTrack ? audio.currentTime : 0;
+          // A held seek survives a reload of its own track and is dropped for another.
+          const resumeAt = sameTrack ? (seekTarget ?? audio.currentTime) : 0;
+          seekTarget = null;
           audio.dataset.trackKey = key;
           audio.dataset.trackId = String(track.id);
           if (resumeAt > 0.5) {
@@ -1119,10 +1208,12 @@
           if (disposed || !next) return;
           reconcile(next);
           applySource(next);
-          audio.volume = next.muted ? 0 : next.volume;
+          level = next.muted ? 0 : next.volume;
+          applyVolume();
           if (!next.current) return;
           if (next.playing && audio.paused) attemptPlay();
-          else if (!next.playing && !audio.paused) audio.pause();
+          else if (next.playing && pausing) cancelPause();
+          else if (!next.playing && !audio.paused) fadeOutAndPause();
         }
 
         async function report(extra) {
@@ -1132,7 +1223,7 @@
               method: 'POST',
               body: {
                 trackId: state.current.id,
-                position: Math.round((audio.currentTime || 0) * 1000),
+                position: Math.round(((seekTarget ?? audio.currentTime) || 0) * 1000),
                 duration: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : undefined,
                 playing: !audio.paused,
                 ...extra,
@@ -1141,7 +1232,15 @@
           } catch { /* the host will be re-read on the next poll */ }
         }
 
-        audio.addEventListener('ended', () => report({ ended: true }));
+        audio.addEventListener('ended', () => {
+          // The old position runs out silently under a held seek; land it rather than advance.
+          if (seekTarget !== null) {
+            land();
+            if (audio.paused) attemptPlay();
+            return;
+          }
+          report({ ended: true });
+        });
         audio.addEventListener('error', () => {
           if (audio.dataset.trackId) report({ error: 'audio element error (track unavailable or network)' });
         });
@@ -1153,10 +1252,12 @@
           apply,
           sync() { apply(state); },
           playNow() { attemptPlay(); },
-          /** Exact position: this transport owns the element. */
-          position: () => (audio.currentTime || 0) * 1000,
+          /** Exact position: this transport owns the element. A held seek counts as already there. */
+          position: () => ((seekTarget ?? audio.currentTime) || 0) * 1000,
           dispose() {
             disposed = true;
+            clearInterval(fade?.timer);
+            clearTimeout(hold);
             try {
               audio.pause();
               audio.removeAttribute('src');
@@ -2169,6 +2270,8 @@
         }
       };
       $('volume').onchange = (event) => control({ action: 'volume', value: Number(event.target.value) });
+      // Sent at once: the transport silences on the first seek and debounces
+      // the resume, so delaying here would only let the old position play on.
       $('seek').onchange = (event) => {
         control({ action: 'seek', value: Math.round((Number(event.target.value) / 1000) * durationMs()) });
       };
