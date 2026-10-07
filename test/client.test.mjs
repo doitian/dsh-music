@@ -130,6 +130,8 @@ async function loadClientBundle({
   contract = 2,
   pageContract,
   playRefusals = 0,
+  documentOrigin = ORIGIN,
+  transport,
 } = {}) {
   const registered = [];
   const registrations = [];
@@ -152,7 +154,8 @@ async function loadClientBundle({
 
   const loaded = {};
   globalThis.window = {
-    location: { origin: ORIGIN },
+    location: { origin: documentOrigin },
+    __DSH_TRANSPORT__: transport,
     __ModuleLoader__: {
       load({ id, factory }) {
         loaded[id] = factory;
@@ -497,7 +500,7 @@ test('a quality change loads a new resource and resumes in place', async () => {
 
     assert.equal(audio.src, `${ORIGIN}/music/stream/123?level=lossless`, 'a fresh resource, not the same URL');
     assert.equal(audio.dataset.trackId, '123', 'still the same track');
-    assert.equal(audio.dataset.trackKey, '123:lossless');
+    assert.equal(audio.dataset.trackKey, `123:lossless:${ORIGIN}`);
 
     // The position is restored once the new file's metadata arrives.
     for (const listener of audio.listeners.loadedmetadata ?? []) listener();
@@ -506,6 +509,49 @@ test('a quality change loads a new resource and resumes in place', async () => {
     await dispose?.();
     harness.restore();
   }
+});
+
+test('audio streams from the shell-published HTTP origin, not the custom scheme', async () => {
+  // Chromium cannot byte-range a `dsh-app://` response, so audio served from
+  // the document origin in the desktop shell restarts on every seek.
+  const harness = await loadClientBundle({ documentOrigin: 'dsh-app://app' });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    const audio = harness.audio();
+    assert.equal(audio.src, 'dsh-app://app/music/stream/123?level=exhigh', 'no stream base yet');
+
+    // A shell that publishes its stream base after boot moves the element over.
+    audio.currentTime = 42;
+    globalThis.window.__DSH_TRANSPORT__ = { streamBaseUrl: `${ORIGIN}/api/` };
+    globalThis.window.__dshMusicEngine.sync();
+    await settle();
+    assert.equal(audio.src, `${ORIGIN}/music/stream/123?level=exhigh`);
+    for (const listener of audio.listeners.loadedmetadata ?? []) listener();
+    assert.equal(audio.currentTime, 42, 'switching origin resumes in place');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a malformed stream base falls back to the document origin', async () => {
+  const harness = await loadClientBundle({ transport: { streamBaseUrl: 'not a url' } });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    assert.equal(harness.audio().src, `${ORIGIN}/music/stream/123?level=exhigh`);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('the page fallback transport also streams from the published origin', () => {
+  assert.match(PANEL_SOURCE, /window\.parent\?\.__DSH_TRANSPORT__\?\.streamBaseUrl/);
+  assert.match(PANEL_SOURCE, /audio\.src = base \+ BASE \+ '\/stream\/'/);
 });
 
 test('volume follows the host without a transport change', async () => {
