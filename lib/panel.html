@@ -1132,6 +1132,11 @@
         /** Start audio, and report a refusal by the autoplay policy as the engine does. */
         function attemptPlay() {
           if (busy || disposed) return;
+          // A repeated `playNow()` must not restart the fade of audio already playing.
+          if (!audio.paused) {
+            if (pausing) cancelPause();
+            return;
+          }
           busy = true;
           pausing = false;
           fadeTo(0, 0);
@@ -1139,7 +1144,8 @@
           audio.play().then(
             () => {
               busy = false;
-              fadeTo(1, FADE_MS);
+              // A seek that arrived while play() was pending owns the fade-in.
+              if (seekTarget === null) fadeTo(1, FADE_MS);
               report({ blocked: false });
             },
             (error) => {
@@ -1184,7 +1190,9 @@
           if (audio.dataset.trackKey === key) return;
 
           const sameTrack = audio.dataset.trackId === String(track.id);
-          const resumeAt = sameTrack ? audio.currentTime : 0;
+          // A held seek survives a reload of its own track and is dropped for another.
+          const resumeAt = sameTrack ? (seekTarget ?? audio.currentTime) : 0;
+          seekTarget = null;
           audio.dataset.trackKey = key;
           audio.dataset.trackId = String(track.id);
           if (resumeAt > 0.5) {
@@ -1224,7 +1232,15 @@
           } catch { /* the host will be re-read on the next poll */ }
         }
 
-        audio.addEventListener('ended', () => report({ ended: true }));
+        audio.addEventListener('ended', () => {
+          // The old position runs out silently under a held seek; land it rather than advance.
+          if (seekTarget !== null) {
+            land();
+            if (audio.paused) attemptPlay();
+            return;
+          }
+          report({ ended: true });
+        });
         audio.addEventListener('error', () => {
           if (audio.dataset.trackId) report({ error: 'audio element error (track unavailable or network)' });
         });

@@ -692,6 +692,133 @@ test('a seek during the silent hold cancels the playback queued for the previous
   }
 });
 
+/** Outlast a seek's fade-out, hold, and fade-in. */
+const seekSettles = () => sleep(SEEK_FADE_MS + SEEK_SETTLE_MS + SEEK_FADE_MS + 100);
+
+test('the old position running out under a held seek lands the seek instead of advancing', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+    const audio = harness.audio();
+    audio.currentTime = 179;
+
+    await seekTo(harness, 2, 30000);
+    harness.calls.length = 0;
+    audio.paused = true; // the browser pauses an element that reaches its end
+    for (const listener of audio.listeners.ended ?? []) listener();
+    await settle();
+
+    const ended = harness.calls.filter((call) => call.url.endsWith('/report') && /"ended":true/.test(call.init.body));
+    assert.equal(ended.length, 0, 'the queue must not advance');
+    assert.equal(audio.currentTime, 30, 'playback continues from the target');
+    assert.equal(audio.paused, false);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a held seek is dropped when the track changes', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+    const audio = harness.audio();
+    // Like a browser: loading a new resource pauses and rewinds.
+    audio.load = function load() {
+      this.paused = true;
+      this.currentTime = 0;
+    };
+
+    await seekTo(harness, 2, 60000);
+    // A replaced queue: a new track, and the host's pending seek cleared.
+    Object.assign(harness.state, { current: { ...harness.state.current, id: 456 } });
+    await seekTo(harness, 3, null);
+    await seekSettles();
+
+    assert.equal(audio.dataset.trackId, '456');
+    assert.equal(audio.currentTime, 0, "the old track's target is not applied to the new one");
+    assert.equal(audio.volume, 0.8);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a held seek survives a quality reload of the same track', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+    const audio = harness.audio();
+    audio.currentTime = 5;
+    audio.load = function load() {
+      this.paused = true;
+    };
+
+    await seekTo(harness, 2, 60000);
+    harness.state.audio = { preferred: 'lossless', last: null };
+    globalThis.window.__dshMusicEngine.sync();
+    await settle();
+    for (const listener of audio.listeners.loadedmetadata ?? []) listener();
+    await seekSettles();
+    assert.equal(audio.currentTime, 60, 'the reload resumes at the target, not the old position');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a repeated playNow does not interrupt audio already playing', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+    const before = harness.playState.attempts;
+    globalThis.window.__dshMusicEngine.playNow();
+    assert.equal(harness.audio().volume, 0.8, 'no drop to silence');
+    assert.equal(harness.playState.attempts, before, 'and no second play()');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a seek that arrives while play() is pending still lands', async () => {
+  const harness = await loadClientBundle({ state: stateDocument({ playing: false }) });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await settle();
+    const audio = harness.audio();
+    audio.currentTime = 5;
+    let resolvePlay;
+    // Like a browser: unpaused at once, the promise settles later.
+    audio.play = function play() {
+      this.paused = false;
+      return new Promise((resolve) => { resolvePlay = resolve; });
+    };
+
+    harness.state.playing = true;
+    globalThis.window.__dshMusicEngine.sync();
+    await settle();
+    await seekTo(harness, 2, 60000);
+    resolvePlay();
+    await seekSettles();
+
+    assert.equal(audio.currentTime, 60, 'the fade-in after play() must not strand the target');
+    assert.equal(audio.volume, 0.8);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
 test('the engine takes the contract from the served page when the host is silent', async () => {
   // The host module and the page are refreshed independently: a plugin mount
   // re-reads panel.html from disk while Node keeps serving the cached module.
