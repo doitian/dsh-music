@@ -268,6 +268,13 @@ async function loadClientBundle({
 /** Let the engine's first poll settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25));
 
+const FADE_MS = Number(/const FADE_MS = (\d+)/.exec(CLIENT_SOURCE)[1]);
+const SEEK_FADE_MS = Number(/const SEEK_FADE_MS = (\d+)/.exec(CLIENT_SOURCE)[1]);
+const SEEK_SETTLE_MS = Number(/const SEEK_SETTLE_MS = (\d+)/.exec(CLIENT_SOURCE)[1]);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Outlast a play or pause fade. */
+const fadeOut = () => new Promise((resolve) => setTimeout(resolve, FADE_MS + 100));
+
 test('the bundle registers its id, apply, and inject list', async () => {
   const harness = await loadClientBundle();
   try {
@@ -322,6 +329,8 @@ test('the engine owns the audio element, independently of any panel', async () =
     assert.equal(audio.attributes['aria-hidden'], 'true');
     assert.equal(audio.dataset.trackId, '123', 'the engine must load the current track');
     assert.equal(audio.src, `${ORIGIN}/music/stream/123?level=exhigh`, 'the level is part of the resource URL');
+    assert.ok(audio.volume < 0.8, 'playback starts by fading in');
+    await fadeOut();
     assert.equal(audio.volume, 0.8, 'the engine applies the host volume');
     assert.equal(audio.paused, false, 'the engine starts playback when the host says so');
 
@@ -559,13 +568,124 @@ test('volume follows the host without a transport change', async () => {
   let dispose;
   try {
     dispose = await harness.bundle.apply(harness.ctx);
-    await settle();
+    await fadeOut();
     assert.equal(harness.audio().volume, 0.8);
 
     harness.state.volume = 0.2; // no transportRev change, as a plain volume edit
     globalThis.window.__dshMusicEngine.sync();
     await settle();
     assert.equal(harness.audio().volume, 0.2, 'enforce() must not be gated on transportRev');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a pause fades out before the element stops, and play fades back in', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+    const audio = harness.audio();
+
+    harness.state.playing = false;
+    globalThis.window.__dshMusicEngine.sync();
+    await settle();
+    assert.equal(audio.paused, false, 'still audible while fading out');
+    assert.ok(audio.volume > 0 && audio.volume < 0.8, 'and getting quieter');
+
+    await fadeOut();
+    assert.equal(audio.paused, true, 'paused once silent');
+    const report = harness.calls.filter((call) => call.url.endsWith('/report')).at(-1);
+    assert.match(report.init.body, /"playing":false/, 'the real pause is reported');
+
+    harness.state.playing = true;
+    globalThis.window.__dshMusicEngine.sync();
+    await settle();
+    assert.equal(audio.paused, false);
+    assert.ok(audio.volume < 0.8, 'resuming fades in');
+    await fadeOut();
+    assert.equal(audio.volume, 0.8);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('play during the fade-out cancels the pause', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+
+    harness.state.playing = false;
+    globalThis.window.__dshMusicEngine.sync();
+    await settle();
+    harness.state.playing = true;
+    globalThis.window.__dshMusicEngine.sync();
+    await fadeOut();
+    assert.equal(harness.audio().paused, false, 'the pause never lands');
+    assert.equal(harness.audio().volume, 0.8);
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+/** Send the host's next seek and let the engine pick it up. */
+async function seekTo(harness, rev, target) {
+  Object.assign(harness.state, { transportRev: rev, pendingSeek: target });
+  globalThis.window.__dshMusicEngine.sync();
+  await settle();
+}
+
+test('a burst of seeks stays silent and lands once, at the latest target', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+    const audio = harness.audio();
+    audio.currentTime = 5;
+
+    await seekTo(harness, 2, 30000);
+    await seekTo(harness, 3, 60000);
+    assert.equal(audio.currentTime, 5, 'nothing jumps while seeks are still arriving');
+
+    await sleep(SEEK_FADE_MS + SEEK_SETTLE_MS + SEEK_FADE_MS + 100);
+    assert.equal(audio.currentTime, 60, 'only the last target is applied');
+    assert.equal(audio.volume, 0.8, 'and the volume comes back');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
+
+test('a seek during the silent hold cancels the playback queued for the previous one', async () => {
+  const harness = await loadClientBundle();
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
+    await fadeOut();
+    const audio = harness.audio();
+    audio.currentTime = 5;
+
+    await seekTo(harness, 2, 30000);
+    // Silent and holding, most of the way to the resume.
+    await sleep(SEEK_FADE_MS + SEEK_SETTLE_MS - 100);
+    assert.equal(audio.volume, 0);
+    await seekTo(harness, 3, 60000);
+
+    // Past the moment the first seek would have resumed.
+    await sleep(200);
+    assert.equal(audio.currentTime, 5, 'the first target never plays');
+    assert.equal(audio.volume, 0, 'still silent, waiting on the second');
+
+    await sleep(SEEK_SETTLE_MS + SEEK_FADE_MS);
+    assert.equal(audio.currentTime, 60);
+    assert.equal(audio.volume, 0.8);
   } finally {
     await dispose?.();
     harness.restore();
