@@ -1437,6 +1437,10 @@
         const queue = state.queue || [];
         if (queue.length === 0) {
           $('queue').innerHTML = `<div class="empty">${esc(t('queueEmpty'))}</div>`;
+          // Emptying the list dropped its scroll position, so a queue restored
+          // with the same song playing has to be revealed again.
+          revealedRow = null;
+          revealing = null;
           return;
         }
         // A window of at most MAX_VISIBLE_ROWS rows that always includes the
@@ -1465,6 +1469,92 @@
             </div>`;
           })
           .join('');
+        revealPlayingRow();
+      }
+
+      /** The playing row the queue last scrolled to, as `index:trackId`. */
+      let revealedRow = null;
+
+      /**
+       * A smooth reveal still under way: the list edge the row is headed for
+       * and the scroll position that lands it there.
+       */
+      let revealing = null;
+
+      // A reveal ends when the list comes to rest, or when the user scrolls it
+      // themselves.
+      for (const type of ['scrollend', 'wheel', 'touchstart', 'pointerdown', 'keydown']) {
+        $('queue').addEventListener(type, () => { revealing = null; }, { passive: true });
+      }
+
+      /**
+       * Bring the playing row into the queue's view when a new song starts.
+       *
+       * Only on a change of song: every poll repaints the list, and scrolling
+       * then would yank it back while the user browses what comes next. Only the
+       * list itself scrolls — stacked in a narrow window the list does not
+       * scroll on its own, and moving the whole page for it would lose whatever
+       * the user is reading on the stage. A row already in view stays put; the
+       * first paint jumps, later songs glide.
+       */
+      function revealPlayingRow() {
+        const list = $('queue');
+        const row = list.querySelector('.row.playing');
+        if (!row || list.offsetParent === null) return;
+        const key = `${state.index}:${state.current?.id}`;
+        if (key === revealedRow) {
+          followReveal(list, row);
+          return;
+        }
+        const first = revealedRow === null;
+        revealedRow = key;
+        revealing = null;
+        const view = list.getBoundingClientRect();
+        const box = row.getBoundingClientRect();
+        const edge = box.top < view.top ? 'top' : box.bottom > view.bottom ? 'bottom' : null;
+        if (!edge) return;
+        const top = revealTarget(list, row, edge);
+        if (first || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          list.scrollTo({ top, behavior: 'instant' });
+          return;
+        }
+        revealing = { edge, top };
+        list.scrollTo({ top, behavior: 'smooth' });
+      }
+
+      /**
+       * Keep a glide aimed at the row when a repaint moves it.
+       *
+       * Songs landing in a short queue slide the painted window, and the row
+       * with it, while the list is still scrolling to where the row was. A glide
+       * that has arrived is left alone: from then on a moving row is a change of
+       * queue, not of song.
+       */
+      function followReveal(list, row) {
+        if (!revealing) return;
+        if (Math.abs(list.scrollTop - revealing.top) < 1) {
+          revealing = null;
+          return;
+        }
+        const top = revealTarget(list, row, revealing.edge);
+        if (Math.abs(top - revealing.top) < 1) return;
+        revealing.top = top;
+        list.scrollTo({ top, behavior: 'smooth' });
+      }
+
+      /**
+       * The scroll position that puts the row at one edge of the list, with
+       * half a row of its neighbours showing so it does not land flush against
+       * the card's edge.
+       */
+      function revealTarget(list, row, edge) {
+        const view = list.getBoundingClientRect();
+        const box = row.getBoundingClientRect();
+        const margin = box.height / 2;
+        const top = edge === 'top'
+          ? list.scrollTop + box.top - view.top - margin
+          : list.scrollTop + box.bottom - view.bottom + margin;
+        return Math.max(0, Math.min(top, list.scrollHeight - list.clientHeight));
       }
 
       /**
