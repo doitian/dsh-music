@@ -33,21 +33,7 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/client.js",
-    "lib/netease.js",
-    "lib/session.js",
-    "lib/state.js",
-    "lib/dj.js",
-    "lib/cache.js",
-    "lib/weapi.js",
-    "lib/scrobble.js",
-    "lib/likes.js",
-    "lib/router.js",
-    "lib/feed.js",
-    "lib/panel.html",
-    "lib/playback.js",
-    "lib/vendor/qrcode.js",
+    "lib/",
     "cordis.patch.yml",
     "icon.svg",
     "README.md"
