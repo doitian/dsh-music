@@ -938,12 +938,22 @@ trusted publishing (OIDC)**. There is no `NPM_TOKEN` secret and no
 `NODE_AUTH_TOKEN` in the repository, and adding one would disable the OIDC
 exchange and break publishing.
 
-1. Bump `version` in `package.json`, commit, and push.
-2. Create a GitHub release whose tag is `v<version>` — `v0.1.2` for `0.1.2` —
-   pointing at that commit.
+1. `npx git-cliff --bumped-version` prints the next version, derived from the
+   conventional commits since the last tag. Set `version` in `package.json` to
+   it.
+2. `npm run changelog` regenerates `CHANGELOG.md` with
+   [git-cliff](https://git-cliff.org) from `cliff.toml`, filing the unreleased
+   commits under that version. Only `feat`, `fix`, `perf` and breaking commits
+   are listed. Never edit the file by hand; fix the commit message convention
+   or `cliff.toml` instead.
+3. Commit both as `chore: release <version>` and push.
+4. Create a GitHub release whose tag is `v<version>` — `v0.1.2` for `0.1.2` —
+   pointing at that commit, with that version's `CHANGELOG.md` section as its
+   notes.
 
 The workflow runs `npm run check`, the deterministic suites, asserts the tag
-matches `package.json`, and publishes. A tag push alone publishes nothing: the
+matches `package.json` and that `CHANGELOG.md` has a section for it, and
+publishes. A tag push alone publishes nothing: the
 trigger is `release: published`.
 
 Two timings look like failures and are not:

@@ -25,8 +25,9 @@ name: publish
 # The registry keeps one trust config per package: revoke with
 # `npm trust revoke --id <id> @doitian/dsh-music` before creating a different one.
 #
-# Releasing: bump `version` in package.json, commit, then create a GitHub
-# release whose tag is `v<version>` (the tag/version check below enforces it).
+# Releasing: bump `version` in package.json, run `npm run changelog`, commit,
+# then create a GitHub release whose tag is `v<version>` (the tag/version and
+# changelog checks below enforce it). docs/DESIGN.md has the full steps.
 # Publishing on `release: published` means a tag push alone does not publish.
 #
 # Green does not mean live. The registry first records a 0.0.0-stage
@@ -62,13 +63,17 @@ jobs:
       - name: Deterministic suites (no network)
         run: npm test
 
-      - name: Require the release tag to match package.json
+      - name: Require the release tag and CHANGELOG.md to match package.json
         if: github.event_name == 'release'
         run: |
           pkg=$(node -p "require('./package.json').version")
           tag="${GITHUB_REF_NAME#v}"
           if [ "$pkg" != "$tag" ]; then
             echo "::error::tag '$tag' does not match package.json version '$pkg'"
+            exit 1
+          fi
+          if ! grep -q "^## \[$pkg\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $pkg; run npm run changelog"
             exit 1
           fi
 

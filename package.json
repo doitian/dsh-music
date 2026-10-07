@@ -46,6 +46,7 @@
   },
   "scripts": {
     "check": "node scripts/check.mjs",
+    "changelog": "npx --yes git-cliff@2.14.2 --bump --output CHANGELOG.md",
     "test": "node --test --test-isolation=none \"test/*.test.mjs\"",
     "probe:headers": "node scripts/probe-headers.mjs",
     "test:live": "node --test --test-isolation=none \"test/live/*.test.mjs\"",
