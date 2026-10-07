@@ -1465,6 +1465,40 @@
             </div>`;
           })
           .join('');
+        revealPlayingRow();
+      }
+
+      /** The playing row the queue last scrolled to, as `index:trackId`. */
+      let revealedRow = null;
+
+      /**
+       * Bring the playing row into the queue's view when a new song starts.
+       *
+       * Only on a change of song: every poll repaints the list, and scrolling
+       * then would yank it back while the user browses what comes next. Only the
+       * list itself scrolls — stacked in a narrow window the list does not
+       * scroll on its own, and moving the whole page for it would lose whatever
+       * the user is reading on the stage. A row already in view stays put; the
+       * first paint jumps, later songs glide.
+       */
+      function revealPlayingRow() {
+        const list = $('queue');
+        const row = list.querySelector('.row.playing');
+        const key = row ? `${state.index}:${state.current?.id}` : null;
+        if (!row || key === revealedRow || list.offsetParent === null) return;
+        const first = revealedRow === null;
+        revealedRow = key;
+        const view = list.getBoundingClientRect();
+        const box = row.getBoundingClientRect();
+        // Leave a sliver of the neighbouring rows showing, so the row does not
+        // land flush against the card's edge.
+        const margin = box.height / 2;
+        let delta = 0;
+        if (box.top < view.top) delta = box.top - view.top - margin;
+        else if (box.bottom > view.bottom) delta = box.bottom - view.bottom + margin;
+        if (!delta) return;
+        const still = first || matchMedia('(prefers-reduced-motion: reduce)').matches;
+        list.scrollBy({ top: delta, behavior: still ? 'instant' : 'smooth' });
       }
 
       /**
