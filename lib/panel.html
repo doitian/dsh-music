@@ -480,6 +480,7 @@
     <div class="toast" id="toast"></div>
 
     <script src="__BASE__/vendor/qrcode.js"></script>
+    <script src="__BASE__/playback.js"></script>
     <script>
       // ------------------------------------------------------------------ setup
       const BASE = '__BASE__';
@@ -948,11 +949,6 @@
       const DJ_MODEL_PREF = 'dsh-music.djmodel.expanded';
       let djModelExpanded = readDjModelPref();
       let volumePostAt = 0;
-      /** Volume fades and the seek debounce, matching the shell engine's. */
-      const FADE_MS = 300;
-      const SEEK_FADE_MS = 120;
-      const SEEK_SETTLE_MS = 400;
-      const FADE_STEP_MS = 16;
 
       const fmt = (ms) => {
         const total = Math.max(Math.floor((ms || 0) / 1000), 0);
@@ -1089,227 +1085,37 @@
       /**
        * The fallback transport: this page owns an `<audio>` element.
        *
-       * It reconciles on `transportRev`, but enforces play/pause on every update
-       * — a refused `play()` does not change the revision, so gating the retry
-       * would stop the music for good after the first browser refusal.
+       * It runs the shell engine's playback core, `playback.js`, which this
+       * page loads from its own host rather than from the bundle — the bundle
+       * is exactly what this fallback cannot trust. The core reconciles on
+       * `transportRev` but enforces play/pause on every update, as the engine
+       * does: a refused `play()` does not change the revision, so gating the
+       * retry would stop the music for good after the first browser refusal.
        */
       function createLocalTransport() {
-        const audio = document.createElement('audio');
-        audio.preload = 'auto';
-        audio.style.display = 'none';
-        document.body.appendChild(audio);
-
-        let applied = -1;
-        let busy = false;
-        let disposed = false;
-        /** Fades work as in the shell engine: the element plays at `level * gain`. */
-        let level = 1;
-        let gain = 1;
-        let fade = null;
-        let pausing = false;
-        let seekTarget = null;
-        let hold = null;
-
-        function applyVolume() {
-          audio.volume = Math.min(Math.max(level * gain, 0), 1);
-        }
-
-        /** Ease `gain` to `to` by the clock, then call `done`; a new fade replaces the running one. */
-        function fadeTo(to, ms, done) {
-          clearInterval(fade?.timer);
-          clearTimeout(hold);
-          hold = null;
-          const from = gain;
-          const start = Date.now();
-          const span = Math.abs(to - from) * ms;
-          const current = { to, timer: 0 };
-          const step = () => {
-            const progress = span > 0 ? Math.min((Date.now() - start) / span, 1) : 1;
-            gain = from + (to - from) * progress;
-            applyVolume();
-            if (progress < 1) return;
-            clearInterval(current.timer);
-            if (fade === current) fade = null;
-            done?.();
-          };
-          current.timer = setInterval(step, FADE_STEP_MS);
-          fade = current;
-          step();
-        }
-
-        function land() {
-          if (seekTarget === null) return;
-          try { audio.currentTime = seekTarget; } catch { /* not seekable yet */ }
-          seekTarget = null;
-        }
-
-        /** Fade to silence and wait for the seeks to settle; called again while silent, it restarts the wait. */
-        function holdForSeek() {
-          fadeTo(0, SEEK_FADE_MS, () => {
-            hold = setTimeout(() => {
-              land();
-              fadeTo(1, SEEK_FADE_MS);
-            }, SEEK_SETTLE_MS);
-          });
-        }
-
-        function seek(seconds) {
-          seekTarget = seconds;
-          if (audio.paused) land();
-          else if (fade?.to !== 0) holdForSeek();
-        }
-
-        function fadeOutAndPause() {
-          if (pausing) return;
-          pausing = true;
-          fadeTo(0, FADE_MS, () => {
-            pausing = false;
-            land();
-            audio.pause();
-          });
-        }
-
-        function cancelPause() {
-          pausing = false;
-          if (seekTarget !== null) holdForSeek();
-          else fadeTo(1, FADE_MS);
-        }
-
-        /** Start audio, and report a refusal by the autoplay policy as the engine does. */
-        function attemptPlay() {
-          if (busy || disposed) return;
-          // A repeated `playNow()` must not restart the fade of audio already playing.
-          if (!audio.paused) {
-            if (pausing) cancelPause();
-            return;
-          }
-          busy = true;
-          pausing = false;
-          fadeTo(0, 0);
-          land();
-          audio.play().then(
-            () => {
-              busy = false;
-              // A seek that arrived while play() was pending owns the fade-in.
-              if (seekTarget === null) fadeTo(1, FADE_MS);
-              report({ blocked: false });
-            },
-            (error) => {
-              busy = false;
-              if (error?.name === 'NotAllowedError') report({ blocked: true });
-            },
-          );
-        }
-
-        function reconcile(next) {
-          if (!next || next.transportRev === applied) return;
-          applied = next.transportRev;
-          if (next.pendingSeek !== null && next.pendingSeek !== undefined) {
-            seek(next.pendingSeek / 1000);
-            api('/seek-consumed', { method: 'POST', body: {} }).catch(() => {});
-          }
-        }
-
-        /**
-         * Pick the resource to play. Every update, not just on a transport change:
-         * the resource identity includes the streaming quality, so a quality
-         * switch has to be noticed without waiting for the revision to move.
-         * The level rides in the URL because the same track at two levels is two
-         * different files — range-requesting offsets across encodings would
-         * corrupt the stream.
-         */
-        function applySource(next) {
-          const track = next.current;
-          if (!track) {
-            if (audio.dataset.trackKey !== undefined) {
-              delete audio.dataset.trackKey;
-              delete audio.dataset.trackId;
-              audio.pause();
-              audio.removeAttribute('src');
-              audio.load();
-            }
-            return;
-          }
-          const level = next.audio?.preferred ?? 'exhigh';
-          const base = streamOrigin();
-          const key = track.id + ':' + level + ':' + base;
-          if (audio.dataset.trackKey === key) return;
-
-          const sameTrack = audio.dataset.trackId === String(track.id);
-          // A held seek survives a reload of its own track and is dropped for another.
-          const resumeAt = sameTrack ? (seekTarget ?? audio.currentTime) : 0;
-          seekTarget = null;
-          audio.dataset.trackKey = key;
-          audio.dataset.trackId = String(track.id);
-          if (resumeAt > 0.5) {
-            audio.addEventListener('loadedmetadata', () => {
-              try { audio.currentTime = resumeAt; } catch { /* not seekable */ }
-            }, { once: true });
-          }
-          audio.src = base + BASE + '/stream/' + track.id + '?level=' + encodeURIComponent(level);
-          audio.load();
-        }
-
-        function apply(next) {
-          if (disposed || !next) return;
-          reconcile(next);
-          applySource(next);
-          level = next.muted ? 0 : next.volume;
-          applyVolume();
-          if (!next.current) return;
-          if (next.playing && audio.paused) attemptPlay();
-          else if (next.playing && pausing) cancelPause();
-          else if (!next.playing && !audio.paused) fadeOutAndPause();
-        }
-
-        async function report(extra) {
-          if (!state?.current) return;
-          try {
-            await api('/report', {
+        const playback = window.__dshMusicPlayback.createPlayback({
+          base: BASE,
+          streamOrigin,
+          call: api,
+          report(extra) {
+            if (!state?.current) return;
+            api('/report', {
               method: 'POST',
-              body: {
-                trackId: state.current.id,
-                position: Math.round(((seekTarget ?? audio.currentTime) || 0) * 1000),
-                duration: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : undefined,
-                playing: !audio.paused,
-                ...extra,
-              },
-            });
-          } catch { /* the next update carries the host's view */ }
-        }
-
-        audio.addEventListener('ended', () => {
-          // The old position runs out silently under a held seek; land it rather than advance.
-          if (seekTarget !== null) {
-            land();
-            if (audio.paused) attemptPlay();
-            return;
-          }
-          report({ ended: true });
+              body: { trackId: state.current.id, ...playback.progress(), ...extra },
+            }).catch(() => { /* the next update carries the host's view */ });
+          },
         });
-        audio.addEventListener('error', () => {
-          if (audio.dataset.trackId) report({ error: 'audio element error (track unavailable or network)' });
-        });
-        audio.addEventListener('timeupdate', () => { paintProgress(); paintLyrics(); });
+        playback.audio.addEventListener('timeupdate', () => { paintProgress(); paintLyrics(); });
 
         return {
           playback: true,
           local: true,
-          apply,
-          sync() { apply(state); },
-          playNow() { attemptPlay(); },
+          apply: playback.apply,
+          sync() { playback.apply(state); },
+          playNow: playback.playNow,
           /** Exact position: this transport owns the element. A held seek counts as already there. */
-          position: () => ((seekTarget ?? audio.currentTime) || 0) * 1000,
-          dispose() {
-            disposed = true;
-            clearInterval(fade?.timer);
-            clearTimeout(hold);
-            try {
-              audio.pause();
-              audio.removeAttribute('src');
-              audio.remove();
-            } catch { /* the document may already be gone */ }
-          },
+          position: playback.position,
+          dispose: playback.dispose,
         };
       }
 

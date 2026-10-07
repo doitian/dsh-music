@@ -821,11 +821,22 @@ That is the older behaviour: it plays normally, it just stops when you open a
 session. Exactly one transport ever owns playback; the unusable one is stood
 down first. A restart brings both halves back into agreement.
 
+Both owners run the same playback core, `lib/playback.js`, so the fades, the
+seek hold, the autoplay retry and the resource key exist once. The host reads it
+in the same module generation as the page and serves it uncached at
+`/music/playback.js`. The page loads it with its own `<script>`, never from the
+bundle, because the bundle is the half that may be of another generation. The
+engine loads the same URL after the contract handshake, so what
+`createPlayback` takes and returns is part of the panel contract. A host from
+before the core was split out answers 404, and the engine then stays inert as
+for any other mismatch. The core is a classic script defining one global,
+`window.__dshMusicPlayback`, which keeps the bundle free of a build step.
+
 ## Development
 
 ```powershell
 npm run check        # node --check on every module
-npm test             # 252 deterministic tests: pure, source cache, like state, DJ, browser half, event stream
+npm test             # 281 deterministic tests: pure, source cache, like state, DJ, browser half, event stream
 npm run test:live    # 40 integration tests against the live NetEase API
 npm run test:all     # both
 ```
@@ -847,7 +858,7 @@ node test/cache.test.mjs     # 10 source cache: lifetimes, shared loads, samplin
 node test/scrobble.test.mjs  # 10 scrobbling: weapi encryption, the play-log request, what is reported
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 73 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
-node test/client.test.mjs    # 44 browser half: the engine against a fake DOM, and the page it pairs with
+node test/client.test.mjs    # 112 browser half: both audio owners against a fake DOM, each playback case run on the engine and the page fallback, and the page itself
 node test/host.test.mjs      # 40 integration: routes, streaming, curation, quality, taste, skips
 ```
 
