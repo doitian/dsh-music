@@ -6,6 +6,9 @@
  * the property this module exists for: **playback does not depend on the Music
  * panel being mounted.**
  *
+ * Playback itself lives in `lib/playback.js`, which the engine and the page's
+ * fallback transport both run; every playback test runs against each of them.
+ *
  * No network and no real browser. Run with `node test/client.test.mjs`.
  *
  * @module dsh-music/test/client
@@ -21,6 +24,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_SOURCE = fs.readFileSync(path.join(HERE, '..', 'lib', 'client.js'), 'utf8');
 const PANEL_SOURCE = fs.readFileSync(path.join(HERE, '..', 'lib', 'panel.html'), 'utf8');
 const ROUTER_SOURCE = fs.readFileSync(path.join(HERE, '..', 'lib', 'router.js'), 'utf8');
+const PLAYBACK_SOURCE = fs.readFileSync(path.join(HERE, '..', 'lib', 'playback.js'), 'utf8');
+
+/** Run the playback core as a `<script>` would, in the given document. */
+function runPlaybackCore(window, document) {
+  new Function('window', 'document', PLAYBACK_SOURCE)(window, document);
+}
 
 const ORIGIN = 'http://127.0.0.1:19387';
 
@@ -177,14 +186,32 @@ async function loadClientBundle({
   documentOrigin = ORIGIN,
   transport,
   eventSource,
+  servePlayback = true,
 } = {}) {
   const registered = [];
   const registrations = [];
   const calls = [];
+  /** Every `<script src>` the bundle added, in order. */
+  const scripts = [];
   /** Shared by every created element so tests control the autoplay refusal. */
   const playState = { refusals: playRefusals, attempts: 0 };
   const body = makeElement('body', playState);
+  const head = makeElement('head', playState);
+  // A script element loads after it is attached; only the playback core is
+  // served, and `servePlayback: false` models a host that predates it.
+  const attach = head.appendChild;
+  head.appendChild = (child) => {
+    attach.call(head, child);
+    scripts.push(child.src);
+    setTimeout(() => {
+      const served = servePlayback && child.src === '/music/playback.js';
+      if (served) runPlaybackCore(globalThis.window, document);
+      for (const listener of child.listeners[served ? 'load' : 'error'] ?? []) listener();
+    }, 0);
+    return child;
+  };
   const document = {
+    head,
     body,
     documentElement: makeElement('html', playState),
     createElement: (tag) => makeElement(tag, playState),
@@ -289,8 +316,10 @@ async function loadClientBundle({
   return {
     bundle,
     ctx,
+    head,
     body,
     calls,
+    scripts,
     registered,
     registrations,
     /** The state document the stub host answers with; tests may mutate it. */
@@ -314,9 +343,9 @@ async function loadClientBundle({
 /** Let the engine's first poll settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25));
 
-const FADE_MS = Number(/const FADE_MS = (\d+)/.exec(CLIENT_SOURCE)[1]);
-const SEEK_FADE_MS = Number(/const SEEK_FADE_MS = (\d+)/.exec(CLIENT_SOURCE)[1]);
-const SEEK_SETTLE_MS = Number(/const SEEK_SETTLE_MS = (\d+)/.exec(CLIENT_SOURCE)[1]);
+const FADE_MS = Number(/const FADE_MS = (\d+)/.exec(PLAYBACK_SOURCE)[1]);
+const SEEK_FADE_MS = Number(/const SEEK_FADE_MS = (\d+)/.exec(PLAYBACK_SOURCE)[1]);
+const SEEK_SETTLE_MS = Number(/const SEEK_SETTLE_MS = (\d+)/.exec(PLAYBACK_SOURCE)[1]);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Outlast a play or pause fade. */
 const fadeOut = () => new Promise((resolve) => setTimeout(resolve, FADE_MS + 100));
@@ -393,49 +422,6 @@ test('the engine owns the audio element, independently of any panel', async () =
   }
 });
 
-test('the engine reports position and consumes a seek exactly once', async () => {
-  const harness = await loadClientBundle({
-    state: stateDocument({ transportRev: 7, pendingSeek: 45000, playing: false }),
-  });
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await settle();
-
-    const audio = harness.audio();
-    assert.equal(audio.currentTime, 45, 'the seek target is applied in seconds');
-    const consumed = harness.calls.filter((call) => call.url.endsWith('/seek-consumed'));
-    assert.equal(consumed.length, 1, 'the one-shot seek is consumed exactly once');
-
-    // Paused state must be mirrored onto the element.
-    assert.equal(audio.paused, true);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
-});
-
-test('the engine reports failures so the host can skip the track', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await settle();
-    harness.calls.length = 0;
-
-    const audio = harness.audio();
-    for (const listener of audio.listeners.error ?? []) listener();
-    await settle();
-
-    const report = harness.calls.find((call) => call.url.endsWith('/report'));
-    assert.ok(report, 'an audio error must be reported');
-    assert.match(report.init.body, /"error":/);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
-});
-
 test('disposing stops playback, removes the element, and unregisters', async () => {
   const harness = await loadClientBundle();
   try {
@@ -470,96 +456,31 @@ test('re-applying never leaves two audio elements playing', async () => {
   }
 });
 
-test('a refused play is retried without a transport change', async () => {
-  // Regression: the retry used to sit behind the `transportRev` gate, so the
-  // first browser refusal stopped the music for good — the panel showed the
-  // autoplay hint and pressing it could never clear it.
-  const harness = await loadClientBundle({ playRefusals: 1 });
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await settle();
-
-    assert.equal(harness.playState.attempts, 1, 'the engine tried to play');
-    assert.equal(harness.audio().paused, true, 'and the browser refused it');
-
-    // Force another poll exactly as the panel does; the desired state and the
-    // transport revision are unchanged.
-    globalThis.window.__dshMusicEngine.sync();
-    await settle();
-
-    assert.equal(harness.playState.attempts, 2, 'a later tick must retry the play');
-    assert.equal(harness.audio().paused, false, 'the retry succeeds once the page is activated');
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
-});
-
-test('a refused play is reported at once so the hint can appear', async () => {
-  const harness = await loadClientBundle({ playRefusals: 1 });
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await settle();
-
-    const reports = harness.calls.filter((call) => call.url.endsWith('/report'));
-    assert.ok(reports.length >= 1, 'the refusal is reported without waiting for the idle cadence');
-    assert.match(reports.at(-1).init.body, /"playing":false/);
-    assert.match(reports.at(-1).init.body, /"blocked":true/, 'as a refusal, the only thing the hint is for');
-
-    globalThis.window.__dshMusicEngine.playNow();
-    await settle();
-    const after = harness.calls.filter((call) => call.url.endsWith('/report')).at(-1).init.body;
-    assert.match(after, /"blocked":false/, 'and audio that starts clears it');
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
-});
-
-test('playNow attempts playback inside the click', async () => {
-  const harness = await loadClientBundle({ playRefusals: 1 });
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await settle();
-    assert.equal(harness.audio().paused, true);
-
-    const before = harness.playState.attempts;
-    globalThis.window.__dshMusicEngine.playNow();
-    assert.equal(harness.playState.attempts, before + 1, 'the attempt happens synchronously, during the gesture');
-    await settle();
-    assert.equal(harness.audio().paused, false);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
-});
-
-test('a quality change loads a new resource and resumes in place', async () => {
-  // Two levels are two different files, so switching must not keep
-  // range-requesting byte offsets into the other encoding.
+test('the engine runs the playback core its host serves', async () => {
   const harness = await loadClientBundle();
   let dispose;
   try {
     dispose = await harness.bundle.apply(harness.ctx);
     await settle();
-    const audio = harness.audio();
-    assert.equal(audio.src, `${ORIGIN}/music/stream/123?level=exhigh`);
+    assert.deepEqual(harness.scripts, ['/music/playback.js'], 'one load, from the host, never from the bundle');
+    assert.equal(harness.head.children.length, 0, 'the script element leaves once it has run');
+    assert.ok(harness.audio(), 'and the core owns the element');
+  } finally {
+    await dispose?.();
+    harness.restore();
+  }
+});
 
-    audio.currentTime = 42; // 42 s into the track
-    harness.state.audio = { preferred: 'lossless', last: null };
-    globalThis.window.__dshMusicEngine.sync();
+test('a host that serves no playback core keeps the engine inert', async () => {
+  // A host from before the core was split out agrees on the contract but has
+  // no `/music/playback.js`; its page still owns its own audio element.
+  const harness = await loadClientBundle({ servePlayback: false });
+  let dispose;
+  try {
+    dispose = await harness.bundle.apply(harness.ctx);
     await settle();
-
-    assert.equal(audio.src, `${ORIGIN}/music/stream/123?level=lossless`, 'a fresh resource, not the same URL');
-    assert.equal(audio.dataset.trackId, '123', 'still the same track');
-    assert.equal(audio.dataset.trackKey, `123:lossless:${ORIGIN}`);
-
-    // The position is restored once the new file's metadata arrives.
-    for (const listener of audio.listeners.loadedmetadata ?? []) listener();
-    assert.equal(audio.currentTime, 42, 'a quality switch must not restart the song');
+    assert.equal(harness.audio(), undefined);
+    assert.equal(globalThis.window.__dshMusicEngine.playback, false);
   } finally {
     await dispose?.();
     harness.restore();
@@ -604,265 +525,382 @@ test('a malformed stream base falls back to the document origin', async () => {
   }
 });
 
-test('the page fallback transport also streams from the published origin', () => {
-  assert.match(PANEL_SOURCE, /window\.parent\?\.__DSH_TRANSPORT__\?\.streamBaseUrl/);
-  assert.match(PANEL_SOURCE, /audio\.src = base \+ BASE \+ '\/stream\/'/);
-});
+// ------------------------------------------------------- both transports
+/**
+ * The two owners of the `<audio>` element behind one surface: the shell
+ * engine, and the page's fallback transport with no engine above it. Both run
+ * the same playback core, and every test below runs against each.
+ *
+ * `origin` is where each streams from while the shell publishes no stream
+ * base: the engine names its document's origin, the page stays relative.
+ * `sent(route)` lists the bodies posted to `/music/api<route>`, oldest first.
+ */
+const TRANSPORTS = {
+  async engine({ state, playRefusals }) {
+    const harness = await loadClientBundle({ state, playRefusals });
+    const dispose = await harness.bundle.apply(harness.ctx);
+    const engine = globalThis.window.__dshMusicEngine;
+    return {
+      origin: ORIGIN,
+      state: harness.state,
+      playState: harness.playState,
+      audio: harness.audio,
+      sent: (route) =>
+        harness.calls.filter((call) => call.url === `/music/api${route}`).map((call) => JSON.parse(call.init?.body ?? 'null')),
+      sync: () => engine.sync(),
+      playNow: () => engine.playNow(),
+      async close() {
+        await dispose();
+        harness.restore();
+      },
+    };
+  },
+  async page({ state, playRefusals = 0 }) {
+    const playState = { refusals: playRefusals, attempts: 0 };
+    // The page reaches its transport's `playNow()` only through the autoplay
+    // hint's button, so the host's view keeps the hint up to be clicked.
+    state.reported = { ...state.reported, playing: false, blocked: true };
+    const panel = await bootPanel({ state, engine: null, playState });
+    return {
+      origin: '',
+      state,
+      playState,
+      audio: panel.audio,
+      sent: (route) => panel.calls.filter((call) => call.path === route).map((call) => call.body),
+      sync: () => void panel.poll(),
+      playNow: () => panel.element('gesture').querySelector('#gesture-go').onclick(),
+      async close() {},
+    };
+  },
+};
 
-test('volume follows the host without a transport change', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    assert.equal(harness.audio().volume, 0.8);
-
-    harness.state.volume = 0.2; // no transportRev change, as a plain volume edit
-    globalThis.window.__dshMusicEngine.sync();
-    await settle();
-    assert.equal(harness.audio().volume, 0.2, 'enforce() must not be gated on transportRev');
-  } finally {
-    await dispose?.();
-    harness.restore();
+/** One test per transport, each with its own copy of `options.state`. */
+function playbackTest(title, options, body) {
+  for (const [name, open] of Object.entries(TRANSPORTS)) {
+    test(`${title} (${name})`, async () => {
+      const player = await open({ ...options, state: structuredClone(options.state ?? stateDocument()) });
+      try {
+        await body(player);
+      } finally {
+        await player.close();
+      }
+    });
   }
-});
-
-test('a pause fades out before the element stops, and play fades back in', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    const audio = harness.audio();
-
-    harness.state.playing = false;
-    globalThis.window.__dshMusicEngine.sync();
-    await settle();
-    assert.equal(audio.paused, false, 'still audible while fading out');
-    assert.ok(audio.volume > 0 && audio.volume < 0.8, 'and getting quieter');
-
-    await fadeOut();
-    assert.equal(audio.paused, true, 'paused once silent');
-    const report = harness.calls.filter((call) => call.url.endsWith('/report')).at(-1);
-    assert.match(report.init.body, /"playing":false/, 'the real pause is reported');
-
-    harness.state.playing = true;
-    globalThis.window.__dshMusicEngine.sync();
-    await settle();
-    assert.equal(audio.paused, false);
-    assert.ok(audio.volume < 0.8, 'resuming fades in');
-    await fadeOut();
-    assert.equal(audio.volume, 0.8);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
-});
-
-test('play during the fade-out cancels the pause', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-
-    harness.state.playing = false;
-    globalThis.window.__dshMusicEngine.sync();
-    await settle();
-    harness.state.playing = true;
-    globalThis.window.__dshMusicEngine.sync();
-    await fadeOut();
-    assert.equal(harness.audio().paused, false, 'the pause never lands');
-    assert.equal(harness.audio().volume, 0.8);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
-});
-
-/** Send the host's next seek and let the engine pick it up. */
-async function seekTo(harness, rev, target) {
-  Object.assign(harness.state, { transportRev: rev, pendingSeek: target });
-  globalThis.window.__dshMusicEngine.sync();
-  await settle();
 }
 
-test('a burst of seeks stays silent and lands once, at the latest target', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    const audio = harness.audio();
-    audio.currentTime = 5;
-
-    await seekTo(harness, 2, 30000);
-    await seekTo(harness, 3, 60000);
-    assert.equal(audio.currentTime, 5, 'nothing jumps while seeks are still arriving');
-
-    await sleep(SEEK_FADE_MS + SEEK_SETTLE_MS + SEEK_FADE_MS + 100);
-    assert.equal(audio.currentTime, 60, 'only the last target is applied');
-    assert.equal(audio.volume, 0.8, 'and the volume comes back');
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
+playbackTest('the element starts the current track, fading in to the host volume', {}, async (player) => {
+  await settle();
+  const audio = player.audio();
+  assert.equal(audio.dataset.trackId, '123');
+  assert.equal(audio.src, `${player.origin}/music/stream/123?level=exhigh`, 'the level is part of the resource URL');
+  assert.equal(audio.attributes['aria-hidden'], 'true');
+  assert.ok(audio.volume < 0.8, 'playback starts by fading in');
+  await fadeOut();
+  assert.equal(audio.volume, 0.8);
+  assert.equal(audio.paused, false);
 });
 
-test('a seek during the silent hold cancels the playback queued for the previous one', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    const audio = harness.audio();
-    audio.currentTime = 5;
+playbackTest(
+  'a seek lands in seconds and is consumed exactly once',
+  { state: stateDocument({ transportRev: 7, pendingSeek: 45000, playing: false }) },
+  async (player) => {
+    await settle();
+    const audio = player.audio();
+    assert.equal(audio.currentTime, 45, 'the seek target is applied in seconds');
+    assert.equal(player.sent('/seek-consumed').length, 1, 'the one-shot seek is consumed exactly once');
+    assert.equal(audio.paused, true, 'paused state is mirrored onto the element');
 
-    await seekTo(harness, 2, 30000);
-    // Silent and holding, most of the way to the resume.
-    await sleep(SEEK_FADE_MS + SEEK_SETTLE_MS - 100);
-    assert.equal(audio.volume, 0);
-    await seekTo(harness, 3, 60000);
+    player.sync();
+    await settle();
+    assert.equal(player.sent('/seek-consumed').length, 1, 'the same revision is not applied twice');
+  },
+);
 
-    // Past the moment the first seek would have resumed.
-    await sleep(200);
-    assert.equal(audio.currentTime, 5, 'the first target never plays');
-    assert.equal(audio.volume, 0, 'still silent, waiting on the second');
+playbackTest('failures are reported so the host can skip the track', {}, async (player) => {
+  await settle();
+  const before = player.sent('/report').length;
+  for (const listener of player.audio().listeners.error ?? []) listener();
+  await settle();
 
-    await sleep(SEEK_SETTLE_MS + SEEK_FADE_MS);
-    assert.equal(audio.currentTime, 60);
-    assert.equal(audio.volume, 0.8);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
+  const [report] = player.sent('/report').slice(before);
+  assert.ok(report, 'an audio error must be reported');
+  assert.equal(report.trackId, 123);
+  assert.match(report.error, /track unavailable/);
 });
+
+playbackTest('a refused play is retried without a transport change', { playRefusals: 1 }, async (player) => {
+  // Regression: the retry used to sit behind the `transportRev` gate, so the
+  // first browser refusal stopped the music for good — the panel showed the
+  // autoplay hint and pressing it could never clear it.
+  await settle();
+  assert.equal(player.playState.attempts, 1, 'playback was tried');
+  assert.equal(player.audio().paused, true, 'and the browser refused it');
+
+  // The desired state and the transport revision are unchanged.
+  player.sync();
+  await settle();
+
+  assert.equal(player.playState.attempts, 2, 'a later update must retry the play');
+  assert.equal(player.audio().paused, false, 'the retry succeeds once the page is activated');
+});
+
+playbackTest('a refused play is reported at once so the hint can appear', { playRefusals: 1 }, async (player) => {
+  await settle();
+  const reports = player.sent('/report');
+  assert.ok(reports.length >= 1, 'the refusal is reported without waiting for the idle cadence');
+  assert.equal(reports.at(-1).playing, false);
+  assert.equal(reports.at(-1).blocked, true, 'as a refusal, the only thing the hint is for');
+
+  player.playNow();
+  await settle();
+  assert.equal(player.sent('/report').at(-1).blocked, false, 'and audio that starts clears it');
+});
+
+playbackTest('playNow attempts playback inside the click', { playRefusals: 1 }, async (player) => {
+  await settle();
+  assert.equal(player.audio().paused, true);
+
+  const before = player.playState.attempts;
+  player.playNow();
+  assert.equal(player.playState.attempts, before + 1, 'the attempt happens synchronously, during the gesture');
+  await settle();
+  assert.equal(player.audio().paused, false);
+});
+
+playbackTest('a quality change loads a new resource and resumes in place', {}, async (player) => {
+  // Two levels are two different files, so switching must not keep
+  // range-requesting byte offsets into the other encoding.
+  await settle();
+  const audio = player.audio();
+  assert.equal(audio.src, `${player.origin}/music/stream/123?level=exhigh`);
+
+  audio.currentTime = 42; // 42 s into the track
+  player.state.audio = { preferred: 'lossless', last: null };
+  player.sync();
+  await settle();
+
+  assert.equal(audio.src, `${player.origin}/music/stream/123?level=lossless`, 'a fresh resource, not the same URL');
+  assert.equal(audio.dataset.trackId, '123', 'still the same track');
+  assert.equal(audio.dataset.trackKey, `123:lossless:${player.origin}`);
+
+  // The position is restored once the new file's metadata arrives.
+  for (const listener of audio.listeners.loadedmetadata ?? []) listener();
+  assert.equal(audio.currentTime, 42, 'a quality switch must not restart the song');
+});
+
+playbackTest('volume follows the host without a transport change', {}, async (player) => {
+  await fadeOut();
+  assert.equal(player.audio().volume, 0.8);
+
+  player.state.volume = 0.2; // no transportRev change, as a plain volume edit
+  player.sync();
+  await settle();
+  assert.equal(player.audio().volume, 0.2, 'enforce() must not be gated on transportRev');
+});
+
+playbackTest('a pause fades out before the element stops, and play fades back in', {}, async (player) => {
+  await fadeOut();
+  const audio = player.audio();
+
+  player.state.playing = false;
+  player.sync();
+  await settle();
+  assert.equal(audio.paused, false, 'still audible while fading out');
+  assert.ok(audio.volume > 0 && audio.volume < 0.8, 'and getting quieter');
+
+  await fadeOut();
+  assert.equal(audio.paused, true, 'paused once silent');
+  assert.equal(player.sent('/report').at(-1).playing, false, 'the real pause is reported');
+
+  player.state.playing = true;
+  player.sync();
+  await settle();
+  assert.equal(audio.paused, false);
+  assert.ok(audio.volume < 0.8, 'resuming fades in');
+  await fadeOut();
+  assert.equal(audio.volume, 0.8);
+});
+
+playbackTest('play during the fade-out cancels the pause', {}, async (player) => {
+  await fadeOut();
+
+  player.state.playing = false;
+  player.sync();
+  await settle();
+  player.state.playing = true;
+  player.sync();
+  await fadeOut();
+  assert.equal(player.audio().paused, false, 'the pause never lands');
+  assert.equal(player.audio().volume, 0.8);
+});
+
+/** Send the host's next seek and let the transport pick it up. */
+async function seekTo(player, rev, target) {
+  Object.assign(player.state, { transportRev: rev, pendingSeek: target });
+  player.sync();
+  await settle();
+}
 
 /** Outlast a seek's fade-out, hold, and fade-in. */
 const seekSettles = () => sleep(SEEK_FADE_MS + SEEK_SETTLE_MS + SEEK_FADE_MS + 100);
 
-test('the old position running out under a held seek lands the seek instead of advancing', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    const audio = harness.audio();
-    audio.currentTime = 179;
+playbackTest('a burst of seeks stays silent and lands once, at the latest target', {}, async (player) => {
+  await fadeOut();
+  const audio = player.audio();
+  audio.currentTime = 5;
 
-    await seekTo(harness, 2, 30000);
-    harness.calls.length = 0;
-    audio.paused = true; // the browser pauses an element that reaches its end
-    for (const listener of audio.listeners.ended ?? []) listener();
-    await settle();
+  await seekTo(player, 2, 30000);
+  await seekTo(player, 3, 60000);
+  assert.equal(audio.currentTime, 5, 'nothing jumps while seeks are still arriving');
 
-    const ended = harness.calls.filter((call) => call.url.endsWith('/report') && /"ended":true/.test(call.init.body));
-    assert.equal(ended.length, 0, 'the queue must not advance');
-    assert.equal(audio.currentTime, 30, 'playback continues from the target');
-    assert.equal(audio.paused, false);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
+  await seekSettles();
+  assert.equal(audio.currentTime, 60, 'only the last target is applied');
+  assert.equal(audio.volume, 0.8, 'and the volume comes back');
 });
 
-test('a held seek is dropped when the track changes', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    const audio = harness.audio();
-    // Like a browser: loading a new resource pauses and rewinds.
-    audio.load = function load() {
-      this.paused = true;
-      this.currentTime = 0;
-    };
+playbackTest('a seek during the silent hold cancels the playback queued for the previous one', {}, async (player) => {
+  await fadeOut();
+  const audio = player.audio();
+  audio.currentTime = 5;
 
-    await seekTo(harness, 2, 60000);
-    // A replaced queue: a new track, and the host's pending seek cleared.
-    Object.assign(harness.state, { current: { ...harness.state.current, id: 456 } });
-    await seekTo(harness, 3, null);
-    await seekSettles();
+  await seekTo(player, 2, 30000);
+  // Silent and holding, most of the way to the resume.
+  await sleep(SEEK_FADE_MS + SEEK_SETTLE_MS - 100);
+  assert.equal(audio.volume, 0);
+  await seekTo(player, 3, 60000);
 
-    assert.equal(audio.dataset.trackId, '456');
-    assert.equal(audio.currentTime, 0, "the old track's target is not applied to the new one");
-    assert.equal(audio.volume, 0.8);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
+  // Past the moment the first seek would have resumed.
+  await sleep(200);
+  assert.equal(audio.currentTime, 5, 'the first target never plays');
+  assert.equal(audio.volume, 0, 'still silent, waiting on the second');
+
+  await sleep(SEEK_SETTLE_MS + SEEK_FADE_MS);
+  assert.equal(audio.currentTime, 60);
+  assert.equal(audio.volume, 0.8);
 });
 
-test('a held seek survives a quality reload of the same track', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    const audio = harness.audio();
-    audio.currentTime = 5;
-    audio.load = function load() {
-      this.paused = true;
-    };
+playbackTest('a report during a held seek names the target, not the old position', {}, async (player) => {
+  await fadeOut();
+  const audio = player.audio();
+  audio.currentTime = 5;
 
-    await seekTo(harness, 2, 60000);
-    harness.state.audio = { preferred: 'lossless', last: null };
-    globalThis.window.__dshMusicEngine.sync();
-    await settle();
-    for (const listener of audio.listeners.loadedmetadata ?? []) listener();
-    await seekSettles();
-    assert.equal(audio.currentTime, 60, 'the reload resumes at the target, not the old position');
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
+  await seekTo(player, 2, 60000);
+  const before = player.sent('/report').length;
+  for (const listener of audio.listeners.error ?? []) listener();
+  await settle();
+  assert.equal(audio.currentTime, 5, 'still holding');
+  assert.equal(player.sent('/report').slice(before)[0].position, 60000, "the panel's bar must not be pulled back");
 });
 
-test('a repeated playNow does not interrupt audio already playing', async () => {
-  const harness = await loadClientBundle();
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await fadeOut();
-    const before = harness.playState.attempts;
-    globalThis.window.__dshMusicEngine.playNow();
-    assert.equal(harness.audio().volume, 0.8, 'no drop to silence');
-    assert.equal(harness.playState.attempts, before, 'and no second play()');
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
+playbackTest('the old position running out under a held seek lands the seek instead of advancing', {}, async (player) => {
+  await fadeOut();
+  const audio = player.audio();
+  audio.currentTime = 179;
+
+  await seekTo(player, 2, 30000);
+  const before = player.sent('/report').length;
+  audio.paused = true; // the browser pauses an element that reaches its end
+  for (const listener of audio.listeners.ended ?? []) listener();
+  await settle();
+
+  const ended = player.sent('/report').slice(before).filter((report) => report.ended === true);
+  assert.equal(ended.length, 0, 'the queue must not advance');
+  assert.equal(audio.currentTime, 30, 'playback continues from the target');
+  assert.equal(audio.paused, false);
 });
 
-test('a seek that arrives while play() is pending still lands', async () => {
-  const harness = await loadClientBundle({ state: stateDocument({ playing: false }) });
-  let dispose;
-  try {
-    dispose = await harness.bundle.apply(harness.ctx);
-    await settle();
-    const audio = harness.audio();
-    audio.currentTime = 5;
-    let resolvePlay;
-    // Like a browser: unpaused at once, the promise settles later.
-    audio.play = function play() {
-      this.paused = false;
-      return new Promise((resolve) => { resolvePlay = resolve; });
-    };
+playbackTest('a track that really ends is reported, so the host advances', {}, async (player) => {
+  await fadeOut();
+  for (const listener of player.audio().listeners.ended ?? []) listener();
+  await settle();
+  assert.equal(player.sent('/report').at(-1).ended, true);
+});
 
-    harness.state.playing = true;
-    globalThis.window.__dshMusicEngine.sync();
-    await settle();
-    await seekTo(harness, 2, 60000);
-    resolvePlay();
-    await seekSettles();
+playbackTest('a held seek is dropped when the track changes', {}, async (player) => {
+  await fadeOut();
+  const audio = player.audio();
+  // Like a browser: loading a new resource pauses and rewinds.
+  audio.load = function load() {
+    this.paused = true;
+    this.currentTime = 0;
+  };
 
-    assert.equal(audio.currentTime, 60, 'the fade-in after play() must not strand the target');
-    assert.equal(audio.volume, 0.8);
-  } finally {
-    await dispose?.();
-    harness.restore();
-  }
+  await seekTo(player, 2, 60000);
+  // A replaced queue: a new track, and the host's pending seek cleared.
+  Object.assign(player.state, { current: { ...player.state.current, id: 456 } });
+  await seekTo(player, 3, null);
+  await seekSettles();
+
+  assert.equal(audio.dataset.trackId, '456');
+  assert.equal(audio.currentTime, 0, "the old track's target is not applied to the new one");
+  assert.equal(audio.volume, 0.8);
+});
+
+playbackTest('a held seek survives a quality reload of the same track', {}, async (player) => {
+  await fadeOut();
+  const audio = player.audio();
+  audio.currentTime = 5;
+  audio.load = function load() {
+    this.paused = true;
+  };
+
+  await seekTo(player, 2, 60000);
+  player.state.audio = { preferred: 'lossless', last: null };
+  player.sync();
+  await settle();
+  for (const listener of audio.listeners.loadedmetadata ?? []) listener();
+  await seekSettles();
+  assert.equal(audio.currentTime, 60, 'the reload resumes at the target, not the old position');
+});
+
+playbackTest('a repeated playNow does not interrupt audio already playing', {}, async (player) => {
+  await fadeOut();
+  const before = player.playState.attempts;
+  player.playNow();
+  assert.equal(player.audio().volume, 0.8, 'no drop to silence');
+  assert.equal(player.playState.attempts, before, 'and no second play()');
+});
+
+playbackTest('a seek that arrives while play() is pending still lands', { state: stateDocument({ playing: false }) }, async (player) => {
+  await settle();
+  const audio = player.audio();
+  audio.currentTime = 5;
+  let resolvePlay;
+  // Like a browser: unpaused at once, the promise settles later.
+  audio.play = function play() {
+    this.paused = false;
+    return new Promise((resolve) => { resolvePlay = resolve; });
+  };
+
+  player.state.playing = true;
+  player.sync();
+  await settle();
+  await seekTo(player, 2, 60000);
+  resolvePlay();
+  await seekSettles();
+
+  assert.equal(audio.currentTime, 60, 'the fade-in after play() must not strand the target');
+  assert.equal(audio.volume, 0.8);
+});
+
+test('the page fallback streams from the published origin, and stays relative without one', async () => {
+  const published = await bootPanel({ engine: null, transport: { streamBaseUrl: `${ORIGIN}/api/` } });
+  assert.equal(published.audio().src, `${ORIGIN}/music/stream/123?level=exhigh`);
+  const malformed = await bootPanel({ engine: null, transport: { streamBaseUrl: 'not a url' } });
+  assert.equal(malformed.audio().src, '/music/stream/123?level=exhigh');
+});
+
+test('the page stands an unusable engine down before it plays itself', async () => {
+  let stoodDown = 0;
+  const inert = { playback: false, inert: true, sync() {}, playNow() {}, state: () => null, dispose() { stoodDown += 1; } };
+  const panel = await bootPanel({ engine: inert });
+  assert.equal(stoodDown, 1, 'exactly one transport may own playback');
+  assert.ok(panel.audio(), 'and the page owns the element instead');
+});
+
+test('a page with a usable engine creates no audio element', async () => {
+  const panel = await bootPanel();
+  assert.equal(panel.audio(), undefined);
 });
 
 test('the engine takes the contract from the served page when the host is silent', async () => {
@@ -1126,10 +1164,18 @@ test('the page defers to a usable engine, and owns audio when there is none', ()
   assert.match(PANEL_SOURCE, /function createLocalTransport\(\)/);
   // And stand the unusable engine down first, so exactly one transport plays.
   assert.match(PANEL_SOURCE, /__dshMusicEngine\?\.dispose\?\.\(\)/);
-  // The local transport keeps the same retry-outside-the-gate discipline.
-  assert.match(PANEL_SOURCE, /if \(next\.playing && audio\.paused\) attemptPlay\(\);/);
   assert.match(PANEL_SOURCE, /positionMs\(\)/);
   assert.match(PANEL_SOURCE, /pokeEngine\(\)/);
+});
+
+test('the page loads the playback core from its host, before its own script', () => {
+  // From the host, not the bundle: the fallback exists for when the bundle is
+  // of another generation, so it must not run the bundle's code.
+  const tag = PANEL_SOURCE.indexOf('<script src="__BASE__/playback.js"></script>');
+  assert.ok(tag >= 0, 'the page must load the core the host serves');
+  const inline = [...PANEL_SOURCE.matchAll(/<script(?![^>]*\ssrc=)[^>]*>/g)].at(-1);
+  assert.ok(tag < inline.index, 'the core must be defined before the page script runs');
+  assert.match(PANEL_SOURCE, /window\.__dshMusicPlayback\.createPlayback\(/);
 });
 
 test('the client bundle parses and keeps the engine wiring', () => {
@@ -1139,9 +1185,28 @@ test('the client bundle parses and keeps the engine wiring', () => {
   assert.match(CLIENT_SOURCE, /PANEL_CONTRACT/);
   // The engine must be created in apply(), not inside a slot component.
   assert.match(CLIENT_SOURCE, /const engine = await createEngine\(\)/);
-  // The retry must live outside the transportRev gate (see the regression test).
-  assert.match(CLIENT_SOURCE, /function enforce\(next\)/);
-  assert.match(CLIENT_SOURCE, /enforce\(next\);/);
+  assert.match(CLIENT_SOURCE, /core\.createPlayback\(/);
+  // Still a bundle that needs nothing beyond the shell's own modules.
+  assert.deepEqual([...CLIENT_SOURCE.matchAll(/require\('([^']+)'\)/g)].map((match) => match[1]), ['react']);
+});
+
+test('the playback core parses and keeps the retry outside the transportRev gate', () => {
+  assert.doesNotThrow(() => new Function(PLAYBACK_SOURCE), 'the core must parse as a classic script');
+  // See the regression test: enforce() runs on every update, not per revision.
+  assert.match(PLAYBACK_SOURCE, /function enforce\(next\)/);
+  assert.match(PLAYBACK_SOURCE, /if \(next\.playing && audio\.paused\) attemptPlay\(\);/);
+  assert.match(PLAYBACK_SOURCE, /enforce\(next\);/);
+  assert.match(PLAYBACK_SOURCE, /window\.__dshMusicPlayback = \{ createPlayback \}/);
+});
+
+test('neither owner keeps a copy of the playback logic', () => {
+  // The duplication this core replaced: two near-identical copies that had to
+  // be kept in step by hand.
+  for (const [name, source] of [['client.js', CLIENT_SOURCE], ['panel.html', PANEL_SOURCE]]) {
+    for (const marker of [/function fadeTo\(/, /function holdForSeek\(/, /function attemptPlay\(/, /function applySource\(/, /const FADE_MS = /]) {
+      assert.equal(marker.test(source), false, `${name} must not define ${marker.source}`);
+    }
+  }
 });
 
 // ------------------------------------------------------------- the panel page
@@ -1272,6 +1337,11 @@ function applyQueueAction(state, { action, index, keepCurrent } = {}) {
  * shell document declares `lang="en"` unless `options.lang` says otherwise, and
  * `options.storage` seeds the page's local storage. `options.handle` may answer
  * one path itself — a refusal the page has to localize, for instance.
+ *
+ * `options.engine` replaces that engine, and `null` leaves none, so the page
+ * plays itself through the playback core it loads before its own script.
+ * `options.transport` is what the shell publishes as `__DSH_TRANSPORT__`, and
+ * `options.playState` controls the autoplay refusal as for the engine.
  */
 async function bootPanel(options = {}) {
   const state = options.state ?? stateDocument();
@@ -1284,15 +1354,23 @@ async function bootPanel(options = {}) {
   const calls = [];
   const elements = new Map();
   const intervals = [];
+  const playState = options.playState ?? { refusals: 0, attempts: 0 };
+  const engine = 'engine' in options ? options.engine : { playback: true, apply() {}, sync() {}, position: () => 0 };
 
   const document = {
     activeElement: null,
+    body: makeElement('body', playState),
     getElementById(id) {
       if (id === 'gesture') return (elements.get('notices')?.children ?? []).find((child) => child.id === 'gesture') ?? null;
       if (!elements.has(id)) elements.set(id, makePageElement(id));
       return elements.get(id);
     },
-    createElement: (tag) => ({ ...makePageElement(tag), querySelector: () => makePageElement('child') }),
+    createElement(tag) {
+      if (tag === 'audio') return makeElement(tag, playState);
+      // One child per element, so a handler set on it can be clicked later.
+      const child = makePageElement('child');
+      return { ...makePageElement(tag), querySelector: () => child };
+    },
     addEventListener() {},
     querySelector: () => null,
     querySelectorAll: () => [],
@@ -1305,7 +1383,8 @@ async function bootPanel(options = {}) {
     : undefined;
   const window = {
     parent: {
-      __dshMusicEngine: options.engine ?? { playback: true, apply() {}, sync() {}, position: () => 0 },
+      __dshMusicEngine: engine ?? undefined,
+      __DSH_TRANSPORT__: options.transport,
       // The page follows the shell's `<html lang>`; pin it so assertions on
       // labels do not depend on the machine's own locale.
       document: { documentElement: { lang: options.lang ?? 'en' }, body: shellBody },
@@ -1368,9 +1447,14 @@ async function bootPanel(options = {}) {
     return { ok: true, status: 200, text: async () => JSON.stringify(body) };
   };
 
-  const inline = [...PANEL_SOURCE.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)];
+  // Served as the router serves it, with the core its `<script src>` loads.
+  const served = PANEL_SOURCE.replaceAll('__BASE__', '/music');
+  runPlaybackCore(window, document);
+  const inline = [...served.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)];
   // A no-op `setTimeout` keeps a stray toast timer from outliving the test;
   // `options.realTimers` lets a test watch what the page defers to a timer.
+  // The core keeps the real timers either way, so fades and seek holds run as
+  // in a browser.
   new Function(
     'document', 'window', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'console',
     'localStorage', 'getComputedStyle',
@@ -1400,6 +1484,8 @@ async function bootPanel(options = {}) {
     storage: stored,
     root: document.documentElement,
     element: (id) => document.getElementById(id),
+    /** The element the local transport created, or undefined. */
+    audio: () => document.body.children.find((child) => child.tagName === 'AUDIO'),
     /** Run the page's 1.5 s poll once, the way the browser would. */
     async poll() {
       intervals.find((entry) => entry.ms === 1500)?.fn();

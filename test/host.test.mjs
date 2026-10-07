@@ -236,6 +236,25 @@ test('serves health, the panel page, and the vendored QR encoder', async () => {
   }
 });
 
+test('serves the playback core the page and the engine share, never cached', async () => {
+  const app = await mount();
+  try {
+    const panel = await app.json('/music/panel');
+    assert.match(panel.body, /<script src="\/music\/playback\.js"><\/script>/, 'the page loads it from this host');
+
+    const core = await app.json('/music/playback.js');
+    assert.equal(core.status, 200);
+    assert.match(core.headers.get('content-type'), /^text\/javascript/);
+    // A copy cached from an earlier host generation would pair old fades with
+    // a new page, which is the skew the panel contract exists to rule out.
+    assert.equal(core.headers.get('cache-control'), 'no-store');
+    assert.equal(core.body, fs.readFileSync(new URL('../lib/playback.js', import.meta.url), 'utf8'));
+    assert.doesNotThrow(() => new Function(core.body), 'the core must parse as a classic script');
+  } finally {
+    await app.close();
+  }
+});
+
 test('routes outside the prefix are left to the next handler', async () => {
   const app = await mount();
   try {
