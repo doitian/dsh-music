@@ -1468,26 +1468,32 @@
             </div>`;
           })
           .join('');
-        revealPlayingRow();
+        revealPlayingRow(state.index - start);
       }
 
-      /** The playing row the queue last scrolled to, as `index:trackId`. */
+      /**
+       * The playing row the queue last scrolled to, as `index:trackId@offset`,
+       * where the offset is its place among the rows painted.
+       */
       let revealedRow = null;
 
       /**
        * Bring the playing row into the queue's view when a new song starts.
        *
        * Only on a change of song: every poll repaints the list, and scrolling
-       * then would yank it back while the user browses what comes next. Only the
+       * then would yank it back while the user browses what comes next. A song
+       * that keeps playing counts as a change when its row moves within the
+       * list: songs landing in a short queue slide the painted window, and the
+       * row with it, from under a scroll position that stays put. Only the
        * list itself scrolls — stacked in a narrow window the list does not
        * scroll on its own, and moving the whole page for it would lose whatever
        * the user is reading on the stage. A row already in view stays put; the
        * first paint jumps, later songs glide.
        */
-      function revealPlayingRow() {
+      function revealPlayingRow(offset) {
         const list = $('queue');
         const row = list.querySelector('.row.playing');
-        const key = row ? `${state.index}:${state.current?.id}` : null;
+        const key = row ? `${state.index}:${state.current?.id}@${offset}` : null;
         if (!row || key === revealedRow || list.offsetParent === null) return;
         const first = revealedRow === null;
         revealedRow = key;
