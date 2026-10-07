@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { apply, inject, name } from '../lib/index.js';
+import { apply, inject, name } from '../../lib/index.js';
 
 const OFFLINE = Boolean(process.env.MUSIC_OFFLINE);
 
@@ -248,7 +248,7 @@ test('serves the playback core the page and the engine share, never cached', asy
     // A copy cached from an earlier host generation would pair old fades with
     // a new page, which is the skew the panel contract exists to rule out.
     assert.equal(core.headers.get('cache-control'), 'no-store');
-    assert.equal(core.body, fs.readFileSync(new URL('../lib/playback.js', import.meta.url), 'utf8'));
+    assert.equal(core.body, fs.readFileSync(new URL('../../lib/playback.js', import.meta.url), 'utf8'));
     assert.doesNotThrow(() => new Function(core.body), 'the core must parse as a classic script');
   } finally {
     await app.close();
@@ -774,8 +774,8 @@ test('removing a liked track does not rewrite the like into a dislike', async ()
   // The case the guard exists for — and the only one where it changes an
   // outcome — needs a track the account has liked, so it is driven through the
   // router against a stub like state rather than a live session.
-  const { MusicRouter } = await import('../lib/router.js');
-  const { Player } = await import('../lib/state.js');
+  const { MusicRouter } = await import('../../lib/router.js');
+  const { Player } = await import('../../lib/state.js');
 
   const player = new Player();
   /** Levels the removal recorded, so a re-rate is visible rather than silent. */

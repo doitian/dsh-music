@@ -835,9 +835,9 @@ for any other mismatch. The core is a classic script defining one global,
 ## Development
 
 ```powershell
-npm run check        # node --check on every module
+npm run check        # node --check on every module under lib/, found by glob
 npm test             # 281 deterministic tests: pure, source cache, like state, DJ, browser half, event stream
-npm run test:live    # 40 integration tests against the live NetEase API
+npm run test:live    # 45 integration tests against the live NetEase API
 npm run test:all     # both
 ```
 
@@ -859,7 +859,7 @@ node test/scrobble.test.mjs  # 10 scrobbling: weapi encryption, the play-log req
 node test/likes.test.mjs     # 12 like-state cache: what counts as an answer, refusals, batching, writes
 node test/dj.test.mjs        # 73 AI DJ: model call identity, route resolution, failure reporting, curation, skips, pool sources, caching, brief rewriting, queue invariants
 node test/client.test.mjs    # 112 browser half: both audio owners against a fake DOM, each playback case run on the engine and the page fallback, and the page itself
-node test/host.test.mjs      # 40 integration: routes, streaming, curation, quality, taste, skips
+node test/live/host.test.mjs # 45 integration: routes, streaming, curation, quality, taste, skips
 ```
 
 The DJ tests drive `ctx.llm.stream()` with a stub that emits the documented
@@ -904,9 +904,13 @@ details without waiting for the host to push again.
 frame per burst of changes, none for a position report, a newcomer's first
 state without a resend to the others, and the sweep and heartbeat.
 
-`npm test` runs the seven deterministic files in sequence (`npm run test:all`
-adds the live one), deliberately **not** `node --test <dir>`: the directory form forks one child process per file, which
-is blocked in sandboxed environments.
+`npm test` runs every `test/*.test.mjs` file, so a new suite is picked up
+without being listed; the live suite sits in `test/live/` so the glob never
+reaches it (`npm run test:all` runs both). Both scripts pass
+`--test-isolation=none`, which loads every file into the one runner process:
+the default isolation forks one child process per file, and that is blocked in
+sandboxed environments. The flag needs a current Node (CI uses 24), though the
+package itself still runs on Node 20.
 
 ### Reloading a change
 
