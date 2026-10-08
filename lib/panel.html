@@ -2218,6 +2218,14 @@
 
       // ------------------------------------------------------------------ wiring
       $('play').onclick = () => control({ action: 'toggle' });
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== ' ' || event.defaultPrevented || event.isComposing ||
+            event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        const focused = document.activeElement;
+        if (focused?.isContentEditable || focused?.matches?.('input, textarea, select, button, [role="textbox"]')) return;
+        event.preventDefault();
+        if (!event.repeat) void control({ action: 'toggle' });
+      });
       $('next').onclick = () => control({ action: 'next' });
       $('prev').onclick = () => control({ action: 'previous' });
       $('mode').onclick = () => control({ action: 'mode', value: { list: 'shuffle', shuffle: 'single', single: 'list' }[state?.mode || 'list'] });

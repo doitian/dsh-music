@@ -1354,6 +1354,7 @@ async function bootPanel(options = {}) {
   const calls = [];
   const elements = new Map();
   const intervals = [];
+  const documentListeners = {};
   const playState = options.playState ?? { refusals: 0, attempts: 0 };
   const engine = 'engine' in options ? options.engine : { playback: true, apply() {}, sync() {}, position: () => 0 };
 
@@ -1371,7 +1372,9 @@ async function bootPanel(options = {}) {
       const child = makePageElement('child');
       return { ...makePageElement(tag), querySelector: () => child };
     },
-    addEventListener() {},
+    addEventListener(type, listener) {
+      (documentListeners[type] ??= []).push(listener);
+    },
     querySelector: () => null,
     querySelectorAll: () => [],
     documentElement: makeRootElement(),
@@ -1483,6 +1486,17 @@ async function bootPanel(options = {}) {
     introRequests,
     storage: stored,
     root: document.documentElement,
+    keydown(overrides = {}, focused = null) {
+      document.activeElement = focused;
+      const event = {
+        key: ' ',
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+        ...overrides,
+      };
+      for (const listener of documentListeners.keydown ?? []) listener(event);
+      return event;
+    },
     element: (id) => document.getElementById(id),
     /** The element the local transport created, or undefined. */
     audio: () => document.body.children.find((child) => child.tagName === 'AUDIO'),
@@ -1524,6 +1538,46 @@ function songInfo(overrides = {}) {
 }
 
 const LYRICS_SHOWN = { 'dsh-music.info.view': 'lyrics' };
+
+for (const transport of ['engine', 'local']) {
+  test(`Space sends the play/pause action without scrolling (${transport})`, async () => {
+    let syncs = 0;
+    const panel = await bootPanel({
+      engine: transport === 'local' ? null : { playback: true, sync() { syncs += 1; }, position: () => 0 },
+    });
+    const controls = () => panel.calls.filter((call) => call.path === '/control');
+    for (let press = 1; press <= 2; press += 1) {
+      assert.equal(panel.keydown().defaultPrevented, true);
+      await settle();
+      assert.equal(controls().length, press);
+      assert.deepEqual(controls().at(-1).body, { action: 'toggle' });
+    }
+    if (transport === 'engine') assert.equal(syncs, 2);
+  });
+}
+
+test('Space preserves focused controls and editable content', async () => {
+  const panel = await bootPanel();
+  for (const tag of ['input', 'textarea', 'select', 'button', '[role="textbox"]']) {
+    const focused = { matches: (selector) => selector.split(', ').includes(tag) };
+    assert.equal(panel.keydown({}, focused).defaultPrevented, false, tag);
+  }
+  assert.equal(panel.keydown({}, { isContentEditable: true }).defaultPrevented, false);
+  assert.equal(panel.calls.some((call) => call.path === '/control'), false);
+});
+
+test('Space ignores repeats, modified keys, composition and handled events', async () => {
+  const panel = await bootPanel();
+  assert.equal(panel.keydown({ repeat: true }).defaultPrevented, true);
+  for (const overrides of [
+    { key: 'Enter' }, { altKey: true }, { ctrlKey: true }, { metaKey: true },
+    { shiftKey: true }, { isComposing: true },
+  ]) {
+    assert.equal(panel.keydown(overrides).defaultPrevented, false);
+  }
+  panel.keydown({ defaultPrevented: true });
+  assert.equal(panel.calls.some((call) => call.path === '/control'), false);
+});
 
 test('the info card opens on the details, and fetches only them', async () => {
   const panel = await bootPanel();
