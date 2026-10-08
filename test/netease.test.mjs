@@ -211,6 +211,19 @@ test('songInfo keeps the song when its album, wiki or artist cannot be read', as
   await assert.rejects(api.songInfo(8), /not found/);
 });
 
+test('a refused lyric request throws instead of reading as an instrumental', async () => {
+  const api = new Netease();
+  api.call = async () => ({ code: -460, message: 'Cheating' });
+  await assert.rejects(api.lyric(1), /Cheating/);
+  api.call = async () => ({ code: 405 });
+  await assert.rejects(api.lyric(1), /code 405/);
+
+  api.call = async () => ({ code: 200, nolyric: true });
+  assert.equal((await api.lyric(1)).noLyric, true);
+  api.call = async () => ({ code: 200, lrc: { lyric: '[00:01.00]Hello' } });
+  assert.equal((await api.lyric(1)).lrc, '[00:01.00]Hello');
+});
+
 test('songUrl asks for the chosen level on the v1 endpoint', async () => {
   const { api, attempts } = scriptedClient(serveAt(['lossless']));
   const resolved = await api.songUrl(42, { level: 'lossless' });

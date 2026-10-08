@@ -633,7 +633,7 @@ browser (DSH web GUI, http://127.0.0.1:<port>)
                           └─ lib/feed.js      the state as an event stream, sent on change
 ```
 
-Six design notes:
+Ten design notes:
 
 - **Audio is proxied, not redirected.** CDN URLs expire after 20 minutes and
   need the session cookie at *resolution* time, so the host resolves and streams
@@ -690,21 +690,39 @@ Six design notes:
   track change, and the lyrics are not highlighted while hidden, so switching
   to a pane is what brings it up to the track. While the details are shown,
   the next track's are fetched once the current ones have painted, so
-  they paint the moment it starts; a load already in flight is shared, not
-  repeated. Shuffle has no known next track, and repeat-one's is the same one,
-  so neither fetches ahead.
+  they paint the moment it starts. While lyrics are shown, the next track's
+  lyrics are fetched after the current ones paint; the host caches lyrics
+  for 24 hours, including instrumental answers, and the page keeps its last
+  30 lyric answers so a prefetched track paints without a loading flash.
+  A load already in flight is shared, not repeated. In list mode, prefetching
+  wraps from the last track to the first, just as playback does. Shuffle has
+  no known next track, and repeat-one's is the same one, so neither fetches ahead.
 - **The introduction is written by the model, and loaded last.**
   `GET /music/api/intro/<id>?lang=en|zh` hands the details above to the DJ's
   model route — one leaf call under the DJ's identity — asking for two or
   three short paragraphs grounded in NetEase's material, in the panel's
-  language. The page asks for it only once the details have painted, and
-  only for the track the visible pane shows, so neither
-  playback nor the NetEase facts wait on a model call. A written introduction
+  language. The page asks for it once the details have painted, so neither
+  playback nor the NetEase facts wait on a model call. While Details is shown,
+  it also prefetches the next track's introduction once that track's details
+  are ready and the current song is past the skip window: 30 seconds or a
+  quarter of its duration, whichever is longer. The page's progress clock
+  checks this even when no state update arrives. On the last track it does
+  not wrap to the first while the DJ is on, since the DJ tops the queue up
+  before playback gets there. Prefetched introductions
+  share the track-and-language cache with visible loads, and their replies
+  repaint only when that track and language are shown. A written introduction
   is cached for a week per track and language; with no model, or a failed
   call, the route answers an empty `text` (never an error), nothing is
   cached, and the page shows NetEase's own prose — straight away on the next
   track too, rather than a "writing" line that will come to nothing. A click
   on the written introduction, or its switch, shows NetEase's prose instead.
+- **The host pre-resolves the next audio URL during playback.** Player updates
+  warm `resolveAudio` for the next track in list mode, including queue edits
+  and quality changes. This works while the panel is closed. Prefetching shares
+  the stream route's pending requests and cache, keyed by track and preferred
+  quality; URLs expire after their supplied lifetime or 15 minutes, whichever
+  is shorter. A failed prefetch changes no playback diagnostics and is not
+  retried on every position report; playback can retry normally when needed.
 - **The page follows the shell's theme.** DSH marks dark with
   `data-ds-dark-theme` on its body and paints from token variables there; the
   page is its own document, so it inherits neither. It carries DSH's light and

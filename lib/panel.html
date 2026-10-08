@@ -929,6 +929,10 @@
       let lyricTrackId = null;
       /** Bumped per request so a slow reply for a skipped track is discarded. */
       let lyricRequest = 0;
+      /** Lyric answers by track, the last 30 kept, so a prefetched track paints without a loading flash. */
+      const lyricCache = new Map();
+      /** Lyric requests in flight, so playback and a prefetch share one. */
+      const lyricLoads = new Map();
       /** Local-storage key for which pane the info card shows: `details` or `lyrics`. */
       const INFO_VIEW_PREF = 'dsh-music.info.view';
       let infoView = readInfoViewPref();
@@ -1224,6 +1228,7 @@
         syncInfo(track?.id ?? null);
         loadIntro();
         prefetchNextDetails();
+        prefetchNextLyrics();
         setIcon($('play'), state.playing ? 'pause' : 'play', { filled: true });
         setText($('mode'), { list: t('modeList'), single: t('modeSingle'), shuffle: t('modeShuffle') }[state.mode] || t('modeList'));
         $('queue-clear').disabled = (state.queue?.length ?? 0) <= (state.current ? 1 : 0);
@@ -1641,17 +1646,69 @@
       }
 
       /**
+       * The track that plays after this one, wrapping past the end as list
+       * playback does. Shuffle has no known next track, and repeat-one's next
+       * is this one, so both answer null.
+       */
+      function nextTrack() {
+        if (!state?.current || state.mode !== 'list') return null;
+        const next = state.queue?.[(state.index + 1) % state.queue.length];
+        return next?.id !== state.current.id ? next : null;
+      }
+
+      /**
        * Fetch the next track's details ahead, so they show the moment it
        * starts. Lazy like the introduction: only after the shown track's
        * details have painted, and only while the details are shown.
-       * Shuffle has no known next track, and repeat-one's next is this one.
        */
       function prefetchNextDetails() {
         if (infoView !== 'details' || !detailsTrackId || !detailsCache.has(detailsTrackId)) return;
-        if (!state || state.mode !== 'list') return;
-        const next = state.queue?.[state.index + 1];
-        if (!next?.id || detailsCache.has(next.id) || detailsLoads.has(next.id)) return;
-        fetchDetails(next.id).catch(() => { /* the track's own load retries */ });
+        const next = nextTrack();
+        if (!next?.id) return;
+        if (detailsCache.has(next.id)) {
+          prefetchNextIntro();
+          return;
+        }
+        if (detailsLoads.has(next.id)) return;
+        fetchDetails(next.id).then(prefetchNextIntro).catch(() => { /* the track's own load retries */ });
+      }
+
+      /**
+       * Write the next track's introduction ahead. Each one is a model call,
+       * so it waits until this track is past the skip window, when the next
+       * is likely to be heard. At the end of the queue the DJ tops up before
+       * playback wraps, so the first track is not written for while it is on.
+       */
+      function prefetchNextIntro() {
+        if (infoView !== 'details' || !state?.playing || detailsTrackId !== state.current?.id) return;
+        // Match the host's skip window: 30 seconds, or a quarter of a longer track.
+        if (positionMs() < Math.max(30_000, durationMs() * 0.25)) return;
+        if (state.dj?.enabled && state.index + 1 >= state.queue.length) return;
+        const next = nextTrack();
+        if (next?.id && detailsCache.has(next.id)) void fetchIntro(next.id, LANG);
+      }
+
+      /** One track's lyrics, fetched once however many ask, and kept. */
+      function fetchLyrics(id) {
+        if (!lyricLoads.has(id)) {
+          const load = api('/lyric/' + id)
+            .then((data) => {
+              lyricCache.set(id, data);
+              if (lyricCache.size > 30) lyricCache.delete(lyricCache.keys().next().value);
+              return data;
+            })
+            .finally(() => lyricLoads.delete(id));
+          lyricLoads.set(id, load);
+        }
+        return lyricLoads.get(id);
+      }
+
+      /** Fetch the next track's lyrics ahead, once the shown ones have painted and while the lyrics are shown. */
+      function prefetchNextLyrics() {
+        if (infoView !== 'lyrics' || lyricTrackId !== state?.current?.id || !lyricCache.has(lyricTrackId)) return;
+        const next = nextTrack();
+        if (!next?.id || lyricCache.has(next.id) || lyricLoads.has(next.id)) return;
+        fetchLyrics(next.id).catch(() => { /* the track's own load retries */ });
       }
 
       async function loadDetails(id) {
@@ -1697,23 +1754,30 @@
        *
        * Lazy on purpose: a model call takes seconds, so it waits until the
        * details have painted — playback and the NetEase facts never wait on
-       * it — and it is asked only for the track the visible pane shows.
+       * it. Prefetching the next introduction uses the same cache.
        */
-      async function loadIntro() {
+      function loadIntro() {
         if (infoView !== 'details' || !detailsTrackId || !detailsCache.has(detailsTrackId)) return;
-        const id = detailsTrackId;
-        const key = `${id}:${LANG}`;
+        const cached = intros.get(`${detailsTrackId}:${LANG}`);
+        if (typeof cached === 'object') introsUnavailable = !cached.text;
+        void fetchIntro(detailsTrackId, LANG);
+      }
+
+      async function fetchIntro(id, lang) {
+        const key = `${id}:${lang}`;
         if (intros.has(key)) return;
         intros.set(key, 'pending');
         if (intros.size > 60) intros.delete(intros.keys().next().value);
         let text = '';
         try {
-          const answer = await api(`/intro/${id}?lang=${LANG}`);
+          const answer = await api(`/intro/${id}?lang=${lang}`);
           text = typeof answer?.text === 'string' ? answer.text : '';
         } catch { /* NetEase's prose stands in */ }
         intros.set(key, { text });
-        introsUnavailable = !text;
-        if (infoView === 'details' && detailsTrackId === id) repaintDetails({ keepScroll: true });
+        if (infoView === 'details' && detailsTrackId === id && LANG === lang) {
+          introsUnavailable = !text;
+          repaintDetails({ keepScroll: true });
+        }
       }
 
       /** NetEase dates are midnight in China; read them there, as YYYY-MM-DD. */
@@ -1802,33 +1866,43 @@
         const request = ++lyricRequest;
         lyric = null;
         lyricLine = -1;
+        if (lyricCache.has(id)) {
+          paintLyricData(lyricCache.get(id));
+          setTimeout(prefetchNextLyrics);
+          return;
+        }
         $('lyrics').innerHTML = `<p class="hint">${esc(t('loading'))}</p>`;
         try {
-          const data = await api('/lyric/' + id);
+          const data = await fetchLyrics(id);
           // Skipping tracks faster than NetEase answers would otherwise let an
           // earlier reply land on the newer track's pane.
-          if (request !== lyricRequest) return;
-          if (data.noLyric || !data.lrc) {
-            $('lyrics').innerHTML = `<p class="hint">${esc(t('instrumental'))}</p>`;
-            return;
-          }
-          const lines = [];
-          for (const raw of data.lrc.split('\n')) {
-            const matches = [...raw.matchAll(/\[(\d+):(\d+(?:[.:]\d+)?)\]/g)];
-            const text = raw.replace(/\[[^\]]*\]/g, '').trim();
-            if (matches.length === 0) continue;
-            for (const match of matches) {
-              const seconds = Number(match[1]) * 60 + Number(String(match[2]).replace(':', '.'));
-              lines.push({ at: seconds * 1000, text });
-            }
-          }
-          lines.sort((a, b) => a.at - b.at);
-          lyric = lines;
-          $('lyrics').innerHTML = lines.map((line, index) => `<p data-line="${index}">${esc(line.text || '♪')}</p>`).join('');
+          if (request !== lyricRequest || lyricTrackId !== id) return;
+          paintLyricData(data);
+          setTimeout(prefetchNextLyrics);
         } catch (error) {
-          if (request !== lyricRequest) return;
+          if (request !== lyricRequest || lyricTrackId !== id) return;
           $('lyrics').innerHTML = `<p class="hint">${esc(error.message)}</p>`;
         }
+      }
+
+      function paintLyricData(data) {
+        if (data.noLyric || !data.lrc) {
+          $('lyrics').innerHTML = `<p class="hint">${esc(t('instrumental'))}</p>`;
+          return;
+        }
+        const lines = [];
+        for (const raw of data.lrc.split('\n')) {
+          const matches = [...raw.matchAll(/\[(\d+):(\d+(?:[.:]\d+)?)\]/g)];
+          const text = raw.replace(/\[[^\]]*\]/g, '').trim();
+          if (matches.length === 0) continue;
+          for (const match of matches) {
+            const seconds = Number(match[1]) * 60 + Number(String(match[2]).replace(':', '.'));
+            lines.push({ at: seconds * 1000, text });
+          }
+        }
+        lines.sort((a, b) => a.at - b.at);
+        lyric = lines;
+        $('lyrics').innerHTML = lines.map((line, index) => `<p data-line="${index}">${esc(line.text || '♪')}</p>`).join('');
       }
 
       function paintLyrics() {
@@ -2414,7 +2488,7 @@
       // Progress and lyric highlighting follow the audio element, which lives
       // in the shell document and reports nothing here, so they need their own
       // repaint clock.
-      setInterval(() => { paintProgress(); paintLyrics(); }, 250);
+      setInterval(() => { paintProgress(); paintLyrics(); prefetchNextIntro(); }, 250);
       window.addEventListener('beforeunload', () => {
         clearInterval(qrTimer);
         events?.close();
