@@ -182,9 +182,10 @@
       .secondary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
       .secondary select, .secondary > button { padding: 4px 8px; font-size: 12px; }
       #quality-info { color: var(--muted); }
+      .volume-control { display: flex; align-items: center; gap: 8px; flex: none; }
       #mute { background: none; border-color: transparent; padding: 4px; color: var(--muted); }
       #mute:hover:not(:disabled) { color: var(--fg); }
-      #volume { flex: 0 0 96px; }
+      #volume { width: 96px; flex: none; }
 
       .info-card { display: flex; flex-direction: column; min-height: 0; }
       .tabs { display: flex; gap: 14px; }
@@ -401,8 +402,10 @@
             <select id="quality" data-i18n-title="qualityTitle" title="Streaming quality"></select>
             <span id="quality-info"></span>
             <span class="spacer"></span>
-            <button id="mute" data-i18n-title="mute" title="Mute"></button>
-            <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
+            <div class="volume-control">
+              <button id="mute" data-i18n-title="mute" title="Mute"></button>
+              <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8" />
+            </div>
           </div>
 
           <div class="card info-card">
