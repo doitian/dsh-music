@@ -1407,10 +1407,8 @@ async function bootPanel(options = {}) {
   const fetch = async (url, init) => {
     const path = String(url).replace(/^.*\/api/, '');
     requests.push(path);
-    // Details and introductions are read in the background after a render —
-    // the next track's details too — so keeping them out of `calls` leaves
-    // `calls.at(-1)` naming what a click sent.
-    if (!/^\/(info|intro)\//.test(path)) calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
+    // Background metadata requests must not displace a click's command in `calls.at(-1)`.
+    if (!/^\/(info|intro|lyric)\//.test(path)) calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
     const custom = options.handle ? await options.handle(path) : null;
     if (custom) return custom;
     let body = {};
@@ -1486,6 +1484,10 @@ async function bootPanel(options = {}) {
     introRequests,
     storage: stored,
     root: document.documentElement,
+    async progress() {
+      intervals.find((entry) => entry.ms === 250)?.fn();
+      await settle();
+    },
     keydown(overrides = {}, focused = null) {
       document.activeElement = focused;
       const event = {
@@ -1731,10 +1733,11 @@ test('the next track\'s details are fetched once the shown ones land, and show t
   assert.deepEqual(panel.infoRequests(), ['/info/1', '/info/2', '/info/3'], 'from what was fetched ahead, and the next is fetched in turn');
 });
 
-test('nothing is fetched ahead while the lyrics are shown, or in shuffle', async () => {
+test('prefetch follows the visible pane, and shuffle has no known next track', async () => {
   const lyrics = await bootPanel({ state: upNextState(), storage: LYRICS_SHOWN });
   await lyrics.poll();
   assert.deepEqual(lyrics.infoRequests(), []);
+  assert.deepEqual(lyrics.lyricRequests(), ['/lyric/1', '/lyric/2']);
 
   const shuffled = await bootPanel({ state: upNextState('shuffle') });
   await shuffled.poll();
@@ -1779,6 +1782,134 @@ test('a track change refetches and replaces the lyrics', async () => {
   assert.deepEqual(panel.lyricRequests(), ['/lyric/123', '/lyric/456']);
   assert.match(panel.element('lyrics').innerHTML, /the next track/);
   assert.doesNotMatch(panel.element('lyrics').innerHTML, /first line/);
+});
+
+test('introduction prefetch waits for the skip window on the local progress clock', async () => {
+  for (const duration of [60_000, 240_000]) {
+    let position = 0;
+    const state = upNextState();
+    state.current.duration = duration;
+    const panel = await bootPanel({
+      state, realTimers: true, lang: 'zh',
+      engine: { playback: true, sync() {}, position: () => position },
+      introById: { 1: { text: 'Current introduction.' }, 2: { text: 'Next introduction.' } },
+    });
+    await settle();
+    assert.deepEqual(panel.introRequests(), ['/intro/1?lang=zh']);
+    position = Math.max(30_000, duration * 0.25) - 1;
+    await panel.progress();
+    assert.equal(panel.introRequests().length, 1);
+    position += 1;
+    await panel.progress();
+    assert.deepEqual(panel.introRequests(), ['/intro/1?lang=zh', '/intro/2?lang=zh']);
+    assert.match(panel.element('details').innerHTML, /Current introduction/);
+    assert.doesNotMatch(panel.element('details').innerHTML, /Next introduction/);
+    await panel.progress();
+    assert.equal(panel.introRequests().length, 2);
+    position = 0;
+    panel.state.index = 1;
+    panel.state.current = panel.state.queue[1];
+    await panel.poll();
+    assert.match(panel.element('details').innerHTML, /Next introduction/);
+    assert.doesNotMatch(panel.element('details').innerHTML, /Writing an introduction/);
+    assert.equal(panel.introRequests().filter((path) => path.includes('/intro/2?')).length, 1);
+  }
+});
+
+test('introductions are not prefetched while paused, in hidden details, or in repeat modes', async () => {
+  for (const options of [
+    { state: { ...upNextState(), playing: false } },
+    { state: upNextState(), storage: LYRICS_SHOWN },
+    { state: upNextState('shuffle') },
+    { state: upNextState('single') },
+  ]) {
+    const panel = await bootPanel({
+      ...options, realTimers: true,
+      engine: { playback: true, sync() {}, position: () => 60_000 },
+    });
+    await panel.progress();
+    assert.equal(panel.introRequests().some((path) => path.includes('/intro/2?')), false);
+  }
+});
+
+test('the last track writes the first one\'s introduction ahead only while the DJ is off', async () => {
+  for (const enabled of [false, true]) {
+    const state = upNextState();
+    state.index = 2;
+    state.current = state.queue[2];
+    state.dj = { enabled };
+    const panel = await bootPanel({
+      state, realTimers: true,
+      engine: { playback: true, sync() {}, position: () => 60_000 },
+    });
+    await settle();
+    await panel.progress();
+    assert.equal(panel.infoRequests().includes('/info/1'), true, 'details still wrap');
+    assert.equal(panel.introRequests().includes('/intro/1?lang=en'), !enabled);
+  }
+});
+
+test('a late details prefetch uses the current queue before spending a model call', async () => {
+  let finish;
+  const panel = await bootPanel({
+    state: upNextState(), realTimers: true,
+    engine: { playback: true, sync() {}, position: () => 60_000 },
+    handle: (path) => path === '/info/2'
+      ? new Promise((resolve) => { finish = () => resolve(jsonResponse(songInfo({ id: 2 }))); })
+      : null,
+  });
+  await settle();
+  panel.state.queue.splice(1, 0, { id: 4, name: 'Inserted' });
+  await panel.poll();
+  finish();
+  await panel.progress();
+  assert.equal(panel.introRequests().includes('/intro/2?lang=en'), false);
+  assert.equal(panel.introRequests().includes('/intro/4?lang=en'), true);
+});
+
+test('next lyrics load without a host update and paint without a loading flash', async () => {
+  const panel = await bootPanel({
+    state: upNextState(), storage: LYRICS_SHOWN, realTimers: true,
+    lyricsById: { 2: '[00:01.00]Next lyrics' },
+  });
+  await settle();
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/1', '/lyric/2']);
+  const pane = panel.element('lyrics');
+  const writes = [];
+  let html = pane.innerHTML;
+  Object.defineProperty(pane, 'innerHTML', {
+    get: () => html,
+    set: (value) => { html = value; writes.push(value); },
+  });
+  panel.state.index = 1;
+  panel.state.current = panel.state.queue[1];
+  await panel.poll();
+  assert.match(pane.innerHTML, /Next lyrics/);
+  assert.equal(writes.some((value) => value.includes('Loading')), false);
+  assert.deepEqual(panel.lyricRequests(), ['/lyric/1', '/lyric/2', '/lyric/3']);
+});
+
+test('pending lyrics are shared with playback and a skipped track cannot repaint the pane', async () => {
+  let finish;
+  const panel = await bootPanel({
+    state: upNextState(), storage: LYRICS_SHOWN, realTimers: true,
+    lyricsById: { 3: '[00:01.00]Third lyrics' },
+    handle: (path) => path === '/lyric/2'
+      ? new Promise((resolve) => { finish = () => resolve(jsonResponse({ lrc: '[00:01.00]Stale lyrics' })); })
+      : null,
+  });
+  await settle();
+  panel.state.index = 1;
+  panel.state.current = panel.state.queue[1];
+  await panel.poll();
+  assert.equal(panel.lyricRequests().filter((path) => path === '/lyric/2').length, 1);
+  panel.state.index = 2;
+  panel.state.current = panel.state.queue[2];
+  await panel.poll();
+  finish();
+  await settle();
+  assert.match(panel.element('lyrics').innerHTML, /Third lyrics/);
+  assert.doesNotMatch(panel.element('lyrics').innerHTML, /Stale lyrics/);
 });
 
 // ------------------------------------------------------------ autoplay hint
