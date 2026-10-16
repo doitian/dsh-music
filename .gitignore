@@ -14,3 +14,5 @@ Thumbs.db
 
 # Local runtime state: a plugin data directory if one is ever pointed here
 session.json
+
+mise.local.toml
